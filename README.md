@@ -3,7 +3,7 @@
 SurveilX is a project for monitoring video feeds with restricted area detection. It consists of a Flask backend and a React frontend. The system detects restricted area breaches in video streams.
 
 ## Project Structure
-
+```
 project-folder/
 │
 ├─ backend/           # Flask backend
@@ -22,6 +22,7 @@ project-folder/
 │  └─ README
 │
 └─ .gitignore
+```
 
 
 ---
