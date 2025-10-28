@@ -32,15 +32,17 @@ project-folder/
 ### Backend
 
 1. Create a virtual environment:
-
+```bash
 cd backend
 python -m venv venv
 venv\Scripts\activate    # Windows
 source venv/bin/activate # Linux/macOS
+```
 
 2. Install dependencies:
-
+```bash
 pip install -r requirements.txt
+```
 
 3. YOLO model files
 
@@ -51,19 +53,23 @@ You can download them from the official YOLO repository or from your provided so
 Place your .mp4 video in the backend/vid1_v2. The system will process these videos.
 
 5. Run the backend:
+```bash
 uvicorn main:app --reload
+```
 
 
 ### Frontend
 
 1. Install dependencies
-
+```bash
 cd frontend
 npm install
+```
 
 2. Start the frontend
-
+```bash
 npm start
+```
 
 - The frontend is available at http://localhost:3000 by default.
 
@@ -71,11 +77,11 @@ npm start
 
 ## Notes
 
-Ensure the backend is running before starting the frontend.
+- Ensure the backend is running before starting the frontend.
 
-Make sure the YOLO model files and video files are placed correctly in the backend folder.
+- Make sure the YOLO model files and video files are placed correctly in the backend folder.
 
 ## Contact 
 
-Mirza Amir Akbar Khan 
+Mirza Amir Akbar Khan<br>
 email: i221112@nu.edu.pk
