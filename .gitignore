@@ -1,0 +1,39 @@
+# ===== PYTHON / FLASK (Backend) =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+instance/
+.env
+venv/
+.env.*
+*.log
+
+# Ignore local videos or test files
+*.mp4
+*.avi
+*.mov
+
+# YOLO model weights (too large for Git)
+*.pt
+
+# Ignore temporary or backup files
+*.bak
+*.tmp
+
+# ===== NODE / REACT (Frontend) =====
+node_modules/
+build/
+dist/
+.env.local
+.env.development
+.env.production
+npm-debug.log*
+
+# ===== System / IDE / Misc =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
