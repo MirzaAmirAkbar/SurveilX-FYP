@@ -1,0 +1,25 @@
+.camera-card {
+  background-color: hsl(222, 47%, 8%);
+  border: 1px solid hsl(222, 30%, 20%);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: white;
+}
+
+.camera-card:hover {
+  background-color: hsl(222, 47%, 12%);
+  transform: translateY(-2px);
+}
+
+.camera-card.active {
+  border: 1px solid hsl(210, 100%, 60%);
+  background-color: hsl(222, 47%, 15%);
+}
+
+.camera-name {
+  font-size: 1rem;
+  font-weight: 500;
+}

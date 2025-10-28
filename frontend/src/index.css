@@ -1,0 +1,29 @@
+body {
+  margin: 0;
+  background-color: hsl(222, 47%, 7%);
+  color: white;
+  font-family: "Inter", sans-serif;
+}
+
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.panel,
+.section,
+.card,
+.dashboard-body > *,
+.livefeed-panel,
+.camera-list-section,
+.video-section,
+.restricted-section {
+  border: 1px solid hsl(222, 47%, 25%);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+
+}

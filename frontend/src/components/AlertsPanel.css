@@ -1,0 +1,6 @@
+.alerts-panel {
+  flex: 1; /* takes 1/5 of width */
+  padding: 1rem;
+  flex-direction: column;
+  gap: 1rem;
+}

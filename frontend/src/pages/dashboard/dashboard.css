@@ -1,0 +1,18 @@
+.dashboard-body {
+  display: flex;
+  flex-direction: row;
+  height: calc(100vh - 80px); /* fill screen minus navbar height */
+  gap: 1rem; /* 🧩 space between panels */
+  padding: 1rem; /* 🧱 space from screen edge */
+  box-sizing: border-box;
+}
+
+/* Both panels share this base style */
+.dashboard-body > * {
+  background-color: hsl(222, 47%, 10%);
+  border-radius: 12px; /* 👌 smooth corners */
+  padding: 1rem;
+  color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); /* subtle depth */
+  overflow: hidden; /* hides anything overflowing curved edges */
+}
