@@ -10,16 +10,18 @@ function LiveFeedDisplay({ selectedCamera, isDrawingMode, visibleAreas, restrict
   const [drawing, setDrawing] = useState(false);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [currentRect, setCurrentRect] = useState(null);
-  /*
-  const videoSrc = selectedCamera
-    ? `/videos/cam${selectedCamera}.mp4`
-    : "/videos/default.mp4";
-  */
- const videoSrc = "http://127.0.0.1:8000/video_feed";
 
+  const videoSrc = "http://127.0.0.1:8000/video_feed";
+
+  // ✅ Make sure image is loaded before using its dimensions
+  const [imgLoaded, setImgLoaded] = useState(false);
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.load();
+    const img = videoRef.current;
+    if (img) {
+      img.onload = () => {
+        setImgLoaded(true);
+        console.log("✅ Image loaded:", img.naturalWidth, img.naturalHeight);
+      };
     }
   }, [videoSrc]);
 
@@ -46,90 +48,72 @@ function LiveFeedDisplay({ selectedCamera, isDrawingMode, visibleAreas, restrict
     });
   };
 
-const handleMouseUp = async () => {
-  if (!drawing || !isDrawingMode) return;
-  setDrawing(false);
+  const handleMouseUp = async () => {
+    if (!drawing || !isDrawingMode) return;
+    setDrawing(false);
 
-  if (currentRect && currentRect.width > 5 && currentRect.height > 5) {
-    const name = prompt("Enter name for this restricted area:");
-    if (name && videoRef.current && overlayRef.current) {
-      // 1️⃣ get natural video dimensions
-      const videoWidth = videoRef.current.videoWidth;
-      const videoHeight = videoRef.current.videoHeight;
+    if (currentRect && currentRect.width > 5 && currentRect.height > 5 && imgLoaded) {
+      const name = prompt("Enter name for this restricted area:");
+      if (name && videoRef.current && overlayRef.current) {
+        // ✅ Use image natural dimensions
+        const videoWidth = videoRef.current.naturalWidth;
+        const videoHeight = videoRef.current.naturalHeight;
 
-      // 2️⃣ get displayed (overlay) dimensions
-      const overlayRect = overlayRef.current.getBoundingClientRect();
-      const displayWidth = overlayRect.width;
-      const displayHeight = overlayRect.height;
+        const overlayRect = overlayRef.current.getBoundingClientRect();
+        const displayWidth = overlayRect.width;
+        const displayHeight = overlayRect.height;
 
-      // 3️⃣ calculate scale ratios
-      const scaleX = videoWidth / displayWidth;
-      const scaleY = videoHeight / displayHeight;
+        const scaleX = videoWidth / displayWidth;
+        const scaleY = videoHeight / displayHeight;
 
-      // 4️⃣ convert current rectangle coords to real video space
-      const trueCoords = {
-        x: Math.round(currentRect.x * scaleX),
-        y: Math.round(currentRect.y * scaleY),
-        width: Math.round(currentRect.width * scaleX),
-        height: Math.round(currentRect.height * scaleY),
-      };
+        const trueCoords = {
+          x: Math.round(currentRect.x * scaleX),
+          y: Math.round(currentRect.y * scaleY),
+          width: Math.round(currentRect.width * scaleX),
+          height: Math.round(currentRect.height * scaleY),
+        };
 
-      const newArea = {
-        id: Date.now(),
-        name,
-        coords: trueCoords, // ✅ use scaled coordinates
-      };
+        const newArea = {
+          id: Date.now(),
+          name,
+          coords: trueCoords,
+        };
 
-      console.log("📦 New restricted area (true coords):", newArea);
+        console.log("📦 New restricted area (true coords):", newArea);
 
-      // 5️⃣ store locally + globally
-      setRectangles((prev) => [...prev, newArea]);
-      if (setRestrictedAreas) setRestrictedAreas((prev) => [...prev, newArea]);
+        setRectangles((prev) => [...prev, newArea]);
+        if (setRestrictedAreas) setRestrictedAreas((prev) => [...prev, newArea]);
 
-      // ✅ send to backend
-      try {
-        const response = await fetch("http://127.0.0.1:8000/restricted-areas/", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(newArea),
-        });
+        try {
+          const response = await fetch("http://127.0.0.1:8000/restricted-areas/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(newArea),
+          });
 
-        const data = await response.json();
-        console.log("✅ Sent to backend:", data);
-      } catch (error) {
-        console.error("❌ Error sending to backend:", error);
+          const data = await response.json();
+          console.log("✅ Sent to backend:", data);
+        } catch (error) {
+          console.error("❌ Error sending to backend:", error);
+        }
       }
-
     }
-  }
 
-  setCurrentRect(null);
-};
-
-
-
+    setCurrentRect(null);
+  };
 
   return (
     <div className="livefeed-container">
       <div className="detection-info">Detected: 3 persons</div>
 
       <div className="video-wrapper">
-        {/*}
-        <video
+        {/* <video ... /> replaced by <img> */}
+        <img
           ref={videoRef}
-          className="feed-video"
           src={videoSrc}
-          autoPlay
-          loop
-          muted
-          playsInline
+          alt="Live feed"
+          className="feed-video"
         />
-        */}
-
-        <img src={videoSrc} alt="Live feed" className="feed-video" />
-        
 
         <div
           className="overlay-layer"
@@ -139,23 +123,20 @@ const handleMouseUp = async () => {
           onMouseUp={handleMouseUp}
         >
           {restrictedAreas
-            .filter(area => visibleAreas.includes(area.id))
+            .filter((area) => visibleAreas.includes(area.id))
             .map((area) => {
-              if (!videoRef.current || !overlayRef.current) return null;
+              if (!videoRef.current || !overlayRef.current || !imgLoaded) return null;
 
-              // 1️⃣ get real and displayed sizes
-              const videoWidth = videoRef.current.videoWidth;
-              const videoHeight = videoRef.current.videoHeight;
+              // ✅ Use naturalWidth / naturalHeight here too
+              const videoWidth = videoRef.current.naturalWidth;
+              const videoHeight = videoRef.current.naturalHeight;
               const overlayRect = overlayRef.current.getBoundingClientRect();
-
               const displayWidth = overlayRect.width;
               const displayHeight = overlayRect.height;
 
-              // 2️⃣ compute scaling from true video → displayed overlay
               const scaleX = displayWidth / videoWidth;
               const scaleY = displayHeight / videoHeight;
 
-              // 3️⃣ scale coords back for display
               const displayX = area.coords.x * scaleX;
               const displayY = area.coords.y * scaleY;
               const displayWidthScaled = area.coords.width * scaleX;
@@ -173,9 +154,7 @@ const handleMouseUp = async () => {
                   }}
                 />
               );
-          })}
-
-
+            })}
 
           {currentRect && (
             <div

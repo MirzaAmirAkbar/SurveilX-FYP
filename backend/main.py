@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pd import RealTimePersonDetector  # assuming your file is named pd.py
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -17,6 +18,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# for testing
+@app.get("/")
+def root():
+    return {"message": "Backend is alive 🔥"}
+
+# model for restricted area data
+class RestrictedArea(BaseModel):
+    id: int
+    name: str
+    coords: dict
+
+
+# endpoint to receive restricted areas
+@app.post("/restricted-areas/")
+def create_area(area: RestrictedArea):
+    print("📦 Received restricted area:", area.dict())
+    return {"status": "ok", "received": area.dict()}
+
 
 # Initialize YOLO detector once (outside generator)
 print("🚀 Initializing YOLO model...")
