@@ -1,8 +1,7 @@
 .livefeed-panel {
-  flex: 4; /* takes about 4/5 of width */
+  flex: 4;
   display: grid;
-  grid-template-columns: 1fr 3fr 1fr; /* camera list | feed | restricted areas */
-  flex-direction: row;
+  grid-template-columns: 1fr 3fr 1fr;
   gap: 1rem;
 }
 
@@ -11,7 +10,7 @@
   background-color: hsl(222, 47%, 12%);
   border-radius: 10px;
   padding: 1rem;
-  overflow-y: auto; /* 👈 makes them scrollable */
+  overflow-y: auto;
 }
 
 .video-section {
@@ -21,18 +20,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-/* Optional: custom scrollbar */
-.camera-list-section::-webkit-scrollbar,
-.restricted-section::-webkit-scrollbar {
-  width: 6px;
-}
-
-.camera-list-section::-webkit-scrollbar-thumb,
-.restricted-section::-webkit-scrollbar-thumb {
-  background: hsl(222, 30%, 30%);
-  border-radius: 10px;
 }
 
 .section-title {
@@ -45,39 +32,40 @@
   padding-bottom: 0.25rem;
   border-bottom: 1px solid hsl(222, 30%, 20%);
   text-align: center;
-  margin: 0 auto 0.75rem auto; /* centers the inline-block */;
-
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1rem;
-
 }
 
-.restricted-header {
+/* Tool Buttons */
+.tools-container {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.75rem;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
 }
 
-.add-area-btn {
-  display: block;
-  width: 100%;
-  background-color: hsl(210, 100%, 60%);
-  color: white;
+.tool-btn {
+  flex: 1;
   border: none;
-  border-radius: 8px;
-  padding: 0.5rem 0;
-  cursor: pointer;
-  font-size: 0.9rem;
+  border-radius: 6px;
+  padding: 0.5rem;
+  font-size: 0.85rem;
   font-weight: 500;
-  transition: background-color 0.2s ease, transform 0.1s ease;
-  margin-bottom: 0.75rem; /* space before first card */
+  cursor: pointer;
+  color: white;
+  transition: opacity 0.2s;
 }
 
-.add-area-btn:hover {
-  background-color: hsl(210, 100%, 70%);
-  transform: translateY(-2px);
+.tool-btn:hover {
+  opacity: 0.9;
 }
 
+.polygon-btn {
+  background-color: hsl(210, 100%, 50%);
+}
 
+.ellipse-btn {
+  background-color: hsl(280, 80%, 60%);
+}
+
+.cancel-btn {
+  background-color: hsl(0, 70%, 60%);
+  width: 100%;
+}
