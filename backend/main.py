@@ -1,15 +1,21 @@
 import cv2
 import asyncio
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pd import RealTimePersonDetector  # assuming your file is named pd.py
 from pydantic import BaseModel
+from typing import Optional, List
 
 app = FastAPI()
 
 VIDEO_PATH = "vid1_v2.mp4"
 stop_stream = False
+rectangles = [
+    {"id": 1, "x": 484, "y": 204, "width": 137, "height": 138, "name": "area 1"},
+    {"id": 2, "x": 8, "y": 185, "width": 105, "height": 168, "name": "area2"},
+]
+_next_area_id = 3
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,25 +24,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# for testing
-@app.get("/")
-def root():
-    return {"message": "Backend is alive 🔥"}
-
-# model for restricted area data
-class RestrictedArea(BaseModel):
-    id: int
-    name: str
-    coords: dict
-
-
-# endpoint to receive restricted areas
-@app.post("/restricted-areas/")
-def create_area(area: RestrictedArea):
-    print("📦 Received restricted area:", area.dict())
-    return {"status": "ok", "received": area.dict()}
-
 
 # Initialize YOLO detector once (outside generator)
 print("🚀 Initializing YOLO model...")
@@ -50,11 +37,7 @@ async def generate_frames(request: Request):
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_delay = 1 / fps
 
-    # Define static rectangles (same as in pd.py)
-    rectangles = [
-        {"x": 484, "y": 204, "width": 137, "height": 138, "name": "area 1"},
-        {"x": 8, "y": 185, "width": 105, "height": 168, "name": "area2"},
-    ]
+    # rectangles comes from module-level, can be updated via API
 
     print("🎥 Starting YOLO inference stream...")
 
@@ -75,35 +58,29 @@ async def generate_frames(request: Request):
             persons = detector.track_persons(detections, frame)
             frame = detector.draw_detections(frame, persons)
 
-            # 🧩 ADD THIS — Draw zones, info text, and breach alerts
-            breached_zones = detector.check_zone_breach(persons, rectangles)
+            # Draw zones, info text, and breach alerts
+            breaches = detector.detect_breaches_with_ids(persons, rectangles)
+            for pid, zone_name in breaches:
+                pdata = persons.get(pid)
+                if pdata:
+                    detector.create_alert_if_new(frame, pid, pdata['bbox'], zone_name)
 
-            # Draw translucent rectangles for zones
-            for rect in rectangles:
-                frame = detector.draw_translucent_rectangle(
-                    frame,
-                    rect["x"], rect["y"],
-                    rect["width"], rect["height"],
-                    name=rect.get("name", None)
-                )
+            # Do not draw zone boxes on backend; frontend overlays will display them
 
             # Info text
             info_text = (
-                f"Persons: {len(persons)} | "
-                f"Known: {sum(1 for p in persons.values() if p['type'] == 'Known')} | "
-                f"Unknown: {sum(1 for p in persons.values() if p['type'] == 'Unknown')}"
+                f"Persons: {len(persons)}"
             )
             cv2.putText(frame, info_text, (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             # Breach text
-            breach_text = (
-                " | ".join([f"{zone} breached" for zone in breached_zones])
-                if breached_zones else "All zones clear"
-            )
+            zones_now = {zone for (_, zone) in breaches}
+            breach_text = (" | ".join([f"{zone} breached" for zone in zones_now])
+                if zones_now else "All zones clear")
             cv2.putText(frame, breach_text, (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        (0, 0, 255) if breached_zones else (0, 255, 0), 2)
+                        (0, 0, 255) if zones_now else (0, 255, 0), 2)
 
             # Encode frame for streaming
             _, buffer = cv2.imencode(".jpg", frame)
@@ -128,6 +105,47 @@ async def video_feed(request: Request):
         generate_frames(request),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
+
+
+@app.get("/alerts")
+async def get_alerts():
+    # Return alerts list (most recent first)
+    alerts = list(reversed(detector.alerts))
+    return JSONResponse(content={"alerts": alerts})
+
+
+class RestrictedArea(BaseModel):
+    id: Optional[int] = None
+    name: Optional[str] = None
+    coords: dict
+
+
+@app.post("/restricted-areas/")
+async def add_restricted_area(area: RestrictedArea):
+    global rectangles, _next_area_id
+    c = area.coords
+    name = area.name or f"area {len(rectangles)+1}"
+    rect = {"id": _next_area_id,
+            "x": int(c.get("x", 0)), "y": int(c.get("y", 0)),
+            "width": int(c.get("width", 0)), "height": int(c.get("height", 0)),
+            "name": name}
+    rectangles.append(rect)
+    _next_area_id += 1
+    return {"status": "ok", "area": rect, "count": len(rectangles)}
+
+
+@app.get("/restricted-areas/")
+async def list_restricted_areas():
+    return {"areas": rectangles}
+
+
+@app.delete("/restricted-areas/{area_id}")
+async def delete_restricted_area(area_id: int):
+    global rectangles
+    before = len(rectangles)
+    rectangles = [r for r in rectangles if int(r.get("id", -1)) != area_id]
+    deleted = before - len(rectangles)
+    return {"status": "ok", "deleted": deleted}
 
 
 @app.on_event("shutdown")

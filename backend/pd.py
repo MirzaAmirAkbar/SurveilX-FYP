@@ -87,7 +87,24 @@ class RealTimePersonDetector:
             print("No person database found. Starting fresh.")
         
         self.current_persons = {}
-        self.person_id_counter = 0
+        self.tracks = {}  # id -> {bbox, last_seen_ts}
+        self.next_person_id = 1
+        self.active_breaches = set()  # (person_id, zone_name)
+        self.alerts = []  # list of {id, zone, ts, image_b64}
+
+    def _compute_iou(self, boxA, boxB):
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+        interW = max(0, xB - xA)
+        interH = max(0, yB - yA)
+        interArea = interW * interH
+        if interArea == 0:
+            return 0.0
+        boxAArea = max(0, (boxA[2] - boxA[0])) * max(0, (boxA[3] - boxA[1]))
+        boxBArea = max(0, (boxB[2] - boxB[0])) * max(0, (boxB[3] - boxB[1]))
+        return interArea / float(boxAArea + boxBArea - interArea + 1e-6)
 
     def calculate_person_features(self, person_crop):
         """Calculate features for person similarity comparison"""
@@ -154,30 +171,57 @@ class RealTimePersonDetector:
         return detections
     
     def track_persons(self, detections, frame):
-        """Track persons across frames and assign IDs"""
+        """Track persons across frames and assign stable numeric IDs starting at 1"""
         current_frame_persons = {}
-        
-        for detection in detections:
-            x1, y1, x2, y2 = detection['bbox']
-            person_crop = frame[y1:y2, x1:x2]
-            
-            known_person, similarity = self.identify_person(person_crop)
-            
-            if known_person:
-                person_id = known_person['name']
-                person_type = "Known"
+
+        # Build matches to existing tracks using IoU
+        unmatched_detections = []
+        used_track_ids = set()
+
+        for det in detections:
+            best_iou = 0.0
+            best_track_id = None
+            for track_id, track in self.tracks.items():
+                if track_id in used_track_ids:
+                    continue
+                iou = self._compute_iou(det['bbox'], track['bbox'])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_track_id = track_id
+
+            if best_iou >= 0.3 and best_track_id is not None:
+                # Update existing track
+                self.tracks[best_track_id] = {
+                    'bbox': det['bbox'],
+                    'last_seen_ts': time.time(),
+                }
+                used_track_ids.add(best_track_id)
+                current_frame_persons[best_track_id] = {
+                    'bbox': det['bbox'],
+                    'confidence': det['confidence'],
+                }
             else:
-                person_id = f"Unknown_{self.person_id_counter}"
-                self.person_id_counter += 1
-                person_type = "Unknown"
-            
-            current_frame_persons[person_id] = {
-                'bbox': detection['bbox'],
-                'confidence': detection['confidence'],
-                'type': person_type,
-                'similarity': similarity if known_person else 0.0
+                unmatched_detections.append(det)
+
+        # Create new tracks for unmatched detections
+        for det in unmatched_detections:
+            new_id = self.next_person_id
+            self.next_person_id += 1
+            self.tracks[new_id] = {
+                'bbox': det['bbox'],
+                'last_seen_ts': time.time(),
             }
-        
+            current_frame_persons[new_id] = {
+                'bbox': det['bbox'],
+                'confidence': det['confidence'],
+            }
+
+        # Optionally prune old tracks (not strictly necessary for video loop)
+        now = time.time()
+        stale_ids = [tid for tid, t in self.tracks.items() if now - t['last_seen_ts'] > 2.5]
+        for tid in stale_ids:
+            self.tracks.pop(tid, None)
+
         return current_frame_persons
 
     def enhance_low_light(self, frame, gamma=1.2):
@@ -197,29 +241,19 @@ class RealTimePersonDetector:
             return frame
 
     def draw_detections(self, frame, persons):
-        """Draw bounding boxes and labels on the frame"""
+        """Draw bounding boxes and labels (ID and confidence)"""
         for person_id, person_data in persons.items():
             x1, y1, x2, y2 = person_data['bbox']
             confidence = person_data['confidence']
-            person_type = person_data['type']
-            similarity = person_data['similarity']
-            
-            if person_type == "Known":
-                color = (0, 255, 0)
-            else:
-                color = (0, 0, 255)
-            
+
+            color = (0, 200, 255)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            
-            label = f"{person_id}"
-            if person_type == "Known":
-                label += f" ({similarity:.2f})"
-            label += f" {confidence:.2f}"
-            
+
+            label = f"ID {person_id}  {confidence:.2f}"
             label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
             cv2.rectangle(frame, (x1, y1 - label_size[1] - 10), (x1 + label_size[0], y1), color, -1)
             cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
+
         return frame
 
     def draw_translucent_rectangle(self, frame, x, y, width, height, name=None, color=(255, 0, 0), alpha=0.3):
@@ -243,26 +277,66 @@ class RealTimePersonDetector:
 
 
     def check_zone_breach(self, persons, rectangles):
-        """Check if any person enters restricted zones."""
+        """Return set of zone names currently breached (legacy)."""
         breached_zones = set()
-        
         for rect in rectangles:
             rx1, ry1 = rect["x"], rect["y"]
             rx2, ry2 = rx1 + rect["width"], ry1 + rect["height"]
-            
             for person_data in persons.values():
                 x1, y1, x2, y2 = person_data['bbox']
-
-                # Compute intersection
                 inter_x1 = max(x1, rx1)
                 inter_y1 = max(y1, ry1)
                 inter_x2 = min(x2, rx2)
                 inter_y2 = min(y2, ry2)
-
                 if inter_x1 < inter_x2 and inter_y1 < inter_y2:
                     breached_zones.add(rect.get("name", "Unnamed Zone"))
-        
         return breached_zones
+
+    def detect_breaches_with_ids(self, persons, rectangles):
+        """Return list of (person_id, zone_name) breaches in this frame."""
+        breaches = []
+        for rect in rectangles:
+            rx1, ry1 = rect["x"], rect["y"]
+            rx2, ry2 = rx1 + rect["width"], ry1 + rect["height"]
+            zone_name = rect.get("name", "Unnamed Zone")
+            for pid, pdata in persons.items():
+                x1, y1, x2, y2 = pdata['bbox']
+                inter_x1 = max(x1, rx1)
+                inter_y1 = max(y1, ry1)
+                inter_x2 = min(x2, rx2)
+                inter_y2 = min(y2, ry2)
+                if inter_x1 < inter_x2 and inter_y1 < inter_y2:
+                    breaches.append((pid, zone_name))
+        return breaches
+
+    def create_alert_if_new(self, frame, pid, bbox, zone_name):
+        """Create alert with face/person snippet if (pid, zone) is newly breached."""
+        key = (pid, zone_name)
+        if key in self.active_breaches:
+            return None
+        self.active_breaches.add(key)
+
+        x1, y1, x2, y2 = bbox
+        h, w = frame.shape[:2]
+        x1 = max(0, x1); y1 = max(0, y1); x2 = min(w - 1, x2); y2 = min(h - 1, y2)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        # Encode as base64
+        _, buf = cv2.imencode('.jpg', crop)
+        import base64
+        img_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+        alert = {
+            'personId': pid,
+            'zone': zone_name,
+            'timestamp': time.time(),
+            'imageB64': img_b64,
+        }
+        self.alerts.append(alert)
+        # keep last 100 alerts
+        if len(self.alerts) > 100:
+            self.alerts = self.alerts[-100:]
+        return alert
 
 
     def process_video_source(self, source=0):

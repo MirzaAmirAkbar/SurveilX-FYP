@@ -10,20 +10,30 @@ function LiveFeedDisplay({ selectedCamera, isDrawingMode, visibleAreas, restrict
   const [drawing, setDrawing] = useState(false);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [currentRect, setCurrentRect] = useState(null);
-
   const videoSrc = "http://127.0.0.1:8000/video_feed";
 
-  // ✅ Make sure image is loaded before using its dimensions
-  const [imgLoaded, setImgLoaded] = useState(false);
+  // Sync with backend restricted areas periodically
   useEffect(() => {
-    const img = videoRef.current;
-    if (img) {
-      img.onload = () => {
-        setImgLoaded(true);
-        console.log("✅ Image loaded:", img.naturalWidth, img.naturalHeight);
-      };
-    }
-  }, [videoSrc]);
+    const fetchAreas = async () => {
+      try {
+        const res = await fetch("http://127.0.0.1:8000/restricted-areas/");
+        const data = await res.json();
+        if (data.areas && Array.isArray(data.areas)) {
+          const mapped = data.areas.map((area) => ({
+            id: area.id,
+            name: area.name,
+            coords: { x: area.x, y: area.y, width: area.width, height: area.height },
+          }));
+          setRectangles(mapped);
+          setRestrictedAreas(mapped);
+        }
+      } catch (e) {
+        console.warn("Could not fetch restricted areas from backend");
+      }
+    };
+    const timer = setInterval(fetchAreas, 1000);
+    return () => clearInterval(timer);
+  }, [setRestrictedAreas]);
 
   const handleMouseDown = (e) => {
     if (!isDrawingMode) return;
@@ -48,72 +58,85 @@ function LiveFeedDisplay({ selectedCamera, isDrawingMode, visibleAreas, restrict
     });
   };
 
-  const handleMouseUp = async () => {
-    if (!drawing || !isDrawingMode) return;
-    setDrawing(false);
+const handleMouseUp = async () => {
+  if (!drawing || !isDrawingMode) return;
+  setDrawing(false);
 
-    if (currentRect && currentRect.width > 5 && currentRect.height > 5 && imgLoaded) {
-      const name = prompt("Enter name for this restricted area:");
-      if (name && videoRef.current && overlayRef.current) {
-        // ✅ Use image natural dimensions
-        const videoWidth = videoRef.current.naturalWidth;
-        const videoHeight = videoRef.current.naturalHeight;
+  if (currentRect && currentRect.width > 5 && currentRect.height > 5) {
+    const name = prompt("Enter name for this restricted area:");
+    if (name && videoRef.current && overlayRef.current) {
+      const videoWidth = videoRef.current.naturalWidth || 0;
+      const videoHeight = videoRef.current.naturalHeight || 0;
+      
+      const overlayRect = overlayRef.current.getBoundingClientRect();
+      const displayWidth = overlayRect.width;
+      const displayHeight = overlayRect.height;
 
-        const overlayRect = overlayRef.current.getBoundingClientRect();
-        const displayWidth = overlayRect.width;
-        const displayHeight = overlayRect.height;
-
-        const scaleX = videoWidth / displayWidth;
-        const scaleY = videoHeight / displayHeight;
-
-        const trueCoords = {
-          x: Math.round(currentRect.x * scaleX),
-          y: Math.round(currentRect.y * scaleY),
-          width: Math.round(currentRect.width * scaleX),
-          height: Math.round(currentRect.height * scaleY),
-        };
-
-        const newArea = {
-          id: Date.now(),
-          name,
-          coords: trueCoords,
-        };
-
-        console.log("📦 New restricted area (true coords):", newArea);
-
-        setRectangles((prev) => [...prev, newArea]);
-        if (setRestrictedAreas) setRestrictedAreas((prev) => [...prev, newArea]);
-
-        try {
-          const response = await fetch("http://127.0.0.1:8000/restricted-areas/", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(newArea),
-          });
-
-          const data = await response.json();
-          console.log("✅ Sent to backend:", data);
-        } catch (error) {
-          console.error("❌ Error sending to backend:", error);
-        }
+      if (videoWidth === 0 || videoHeight === 0) {
+        console.warn("Could not determine video dimensions");
+        setCurrentRect(null);
+        return;
       }
-    }
 
-    setCurrentRect(null);
-  };
+      const scaleX = videoWidth / displayWidth;
+      const scaleY = videoHeight / displayHeight;
+
+      const trueCoords = {
+        x: Math.round(currentRect.x * scaleX),
+        y: Math.round(currentRect.y * scaleY),
+        width: Math.round(currentRect.width * scaleX),
+        height: Math.round(currentRect.height * scaleY),
+      };
+
+      console.log("📦 New restricted area (true coords):", { name, ...trueCoords });
+
+      // Send to backend
+      try {
+        const response = await fetch("http://127.0.0.1:8000/restricted-areas/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name,
+            coords: trueCoords,
+          }),
+        });
+
+        const data = await response.json();
+        console.log("✅ Sent to backend:", data);
+      } catch (error) {
+        console.error("❌ Error sending to backend:", error);
+      }
+
+    }
+  }
+
+  setCurrentRect(null);
+};
+
+
+
 
   return (
     <div className="livefeed-container">
       <div className="detection-info">Detected: 3 persons</div>
 
       <div className="video-wrapper">
-        {/* <video ... /> replaced by <img> */}
-        <img
+        {/*}
+        <video
           ref={videoRef}
-          src={videoSrc}
-          alt="Live feed"
           className="feed-video"
+          src={videoSrc}
+          autoPlay
+          loop
+          muted
+          playsInline
         />
+        */}
+
+        <img ref={videoRef} src={videoSrc} alt="Live feed" className="feed-video" />
+        
 
         <div
           className="overlay-layer"
@@ -121,16 +144,17 @@ function LiveFeedDisplay({ selectedCamera, isDrawingMode, visibleAreas, restrict
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          style={{ cursor: isDrawingMode ? "crosshair" : "default" }}
         >
           {restrictedAreas
-            .filter((area) => visibleAreas.includes(area.id))
+            .filter(area => visibleAreas.includes(area.id))
             .map((area) => {
-              if (!videoRef.current || !overlayRef.current || !imgLoaded) return null;
+              if (!videoRef.current || !overlayRef.current) return null;
 
-              // ✅ Use naturalWidth / naturalHeight here too
               const videoWidth = videoRef.current.naturalWidth;
               const videoHeight = videoRef.current.naturalHeight;
               const overlayRect = overlayRef.current.getBoundingClientRect();
+
               const displayWidth = overlayRect.width;
               const displayHeight = overlayRect.height;
 
@@ -154,7 +178,7 @@ function LiveFeedDisplay({ selectedCamera, isDrawingMode, visibleAreas, restrict
                   }}
                 />
               );
-            })}
+          })}
 
           {currentRect && (
             <div

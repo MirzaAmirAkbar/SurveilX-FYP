@@ -1,0 +1,123 @@
+.login-body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: calc(100vh - 80px);
+  background: hsl(222, 47%, 7%); /* match body background */
+}
+
+.login-card {
+  background: hsl(222, 47%, 10%);
+  border: 1px solid hsl(222, 47%, 20%);
+  border-radius: 12px;
+  padding: 2rem;
+  width: 360px;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 1.75rem;
+  text-align: center;
+}
+
+.login-subtitle {
+  color: hsl(222, 20%, 70%);
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.login-form label {
+  font-size: 0.9rem;
+  color: hsl(222, 20%, 80%);
+}
+
+.login-form input {
+  background: hsl(222, 47%, 15%);
+  border: 1px solid hsl(222, 30%, 30%);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  color: white;
+  outline: none;
+  transition: border 0.2s ease, background 0.2s ease;
+}
+
+.login-form input:focus {
+  border: 1px solid hsl(210, 100%, 60%);
+  background: hsl(222, 47%, 18%);
+}
+
+.login-form button {
+  margin-top: 0.5rem;
+  padding: 0.7rem;
+  border: none;
+  border-radius: 8px;
+  background: hsl(210, 100%, 60%);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.login-form button:hover {
+  background: hsl(210, 100%, 70%);
+}
+
+.login-footer {
+  text-align: center;
+  font-size: 0.9rem;
+  color: hsl(222, 20%, 75%);
+  margin-top: 0.5rem;
+}
+
+.login-footer a {
+  color: hsl(210, 100%, 60%);
+  text-decoration: none;
+}
+
+.login-footer a:hover {
+  text-decoration: underline;
+}
+
+/* 🛡️ SurveilX Header Section */
+.login-brand {
+  display: flex;
+  flex-direction: column; /* stack icon above text */
+  align-items: center;    /* center everything horizontally */
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  color: white;
+}
+
+.login-icon {
+  color: hsl(210, 100%, 60%);
+}
+
+.login-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center; /* center text under the icon */
+  text-align: center;
+}
+
+.login-title h1 {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+
+.login-title p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: hsl(220, 10%, 70%);
+}

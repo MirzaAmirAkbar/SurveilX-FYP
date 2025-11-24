@@ -13,7 +13,6 @@ function LiveFeedPanel() {
         { id: 1, name: "Aisle 1"},
         { id: 2, name: "Aisle 2"},
         { id: 3, name: "Aisle 3"},
-        { id: 4, name: "Parking Lot"},
     ];
 
     const [restrictedAreas, setRestrictedAreas] = useState([
@@ -72,6 +71,15 @@ function LiveFeedPanel() {
                   ? prev.filter(id => id !== area.id) // toggle off
                   : [...prev, area.id]                // toggle on
               );
+            }}
+            onDelete={async () => {
+              try {
+                await fetch(`http://127.0.0.1:8000/restricted-areas/${area.id}`, {
+                  method: "DELETE",
+                });
+              } catch {}
+              setRestrictedAreas(prev => prev.filter(a => a.id !== area.id));
+              setVisibleAreas(prev => prev.filter(id => id !== area.id));
             }}
           />
 
