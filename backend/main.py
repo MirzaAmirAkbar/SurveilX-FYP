@@ -1,11 +1,14 @@
 import cv2
 import asyncio
-from fastapi import FastAPI, Request
+# 1. Import necessary components from the new database.py file
+from database import users_collection, hash_password, verify_password 
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pd import RealTimePersonDetector
-from pydantic import BaseModel
+from pd import RealTimePersonDetector 
+from pydantic import BaseModel, EmailStr # Use EmailStr for validation
 from typing import Optional, List, Union
+import time
 
 app = FastAPI()
 
@@ -27,6 +30,58 @@ app.add_middleware(
 print("🚀 Initializing YOLO model...")
 detector = RealTimePersonDetector(performance_mode='balanced')
 print("✅ YOLO model ready!")
+
+# 2. Define the Pydantic models for user registration and login
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    name: Optional[str] = None
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+# 3. Add a basic user registration endpoint
+@app.post("/auth/register")
+async def register_user(user: UserRegister):
+    # Check if user already exists
+    existing_user = await users_collection.find_one({"email": user.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Hash the password
+    hashed_password = hash_password(user.password)
+
+    # Create the user document
+    user_doc = {
+        "email": user.email,
+        "hashed_password": hashed_password,
+        "name": user.name,
+        "created_at": time.time()
+    }
+
+    # Insert into MongoDB
+    await users_collection.insert_one(user_doc)
+
+    return {"message": "User registered successfully", "email": user.email}
+
+# 4. Add a basic user login endpoint
+@app.post("/auth/login")
+async def login_user(user: UserLogin):
+    # Find the user by email
+    user_doc = await users_collection.find_one({"email": user.email})
+    
+    if not user_doc:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # Verify the password
+    if not verify_password(user.password, user_doc["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+    # In a real app, you would generate a JWT token here.
+    # For now, we'll return a simple success message.
+    return {"message": "Login successful", "user": user_doc["email"]}
+
 
 async def generate_frames(request: Request):
     global stop_stream

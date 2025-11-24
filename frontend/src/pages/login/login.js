@@ -6,14 +6,37 @@ function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (email && password) {
-      console.log("Logging in with:", { email, password });
-      window.location.href = "/dashboard"; // or useNavigate if router is set up
-    } else {
+    if (!email || !password) {
       alert("Please fill in both fields.");
+      return;
+    }
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (response.ok) {
+        // Successful login
+        const data = await response.json();
+        console.log("Login successful:", data);
+        window.location.href = "/dashboard"; // Navigate to the dashboard
+      } else {
+        // Handle failed login (e.g., 401 Invalid credentials)
+        const errorData = await response.json();
+        alert(`Login Failed: ${errorData.detail || "Check your email and password."}`);
+      }
+    } catch (error) {
+      // Handle network errors (e.g., backend is down)
+      console.error("Network error during login:", error);
+      alert("Could not connect to the server. Is the backend running?");
     }
   };
 
