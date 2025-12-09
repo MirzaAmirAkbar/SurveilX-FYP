@@ -1,10 +1,11 @@
 import React from "react";
 import "./RestrictedAreaCard.css";
 
-function RestrictedAreaCard({ name, isActive, onClick, onDelete }) {
+// Added 'variant' prop with a default value of 'red'
+function RestrictedAreaCard({ name, isActive, onClick, onDelete, variant = 'red' }) {
   return (
     <div
-      className={`restricted-card ${isActive ? "active" : ""}`}
+      className={`restricted-card ${isActive ? "active" : ""} variant-${variant}`}
       onClick={onClick}
     >
       <div className="restricted-name">{name}</div>

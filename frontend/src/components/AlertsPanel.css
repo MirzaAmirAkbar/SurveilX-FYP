@@ -52,9 +52,27 @@
 
 .alert-zone {
   font-size: 0.9rem;
-  color: #ef4444;
+  /*color: #ef4444;*/
+  font-weight: 600;
 }
 
 .alert-empty {
   color: #6b7280;
+}
+
+/* NEW CLASSES */
+.alert-type-breach {
+  color: #ef4444; /* Red */
+}
+
+.alert-type-loitering {
+  color: #2563eb; /* Blue */
+}
+
+.alert-empty {
+  color: #6b7280;
+}
+
+.alert-type-running {
+  color: #f59e0b; /* Amber-500: A nice readable yellow/orange */
 }

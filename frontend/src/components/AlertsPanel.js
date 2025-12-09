@@ -38,8 +38,19 @@ function AlertsPanel() {
             />
             <div className="alert-meta">
               <div className="alert-title">ID {a.personId}</div>
-              <div className="alert-zone">Breach: {a.zone}</div>
-              {/* Optional: timestamp formatting */}
+              
+              {/* UPDATED LOGIC HERE */}
+                <div 
+                  className={`alert-zone ${
+                    a.type === 'loitering' ? 'alert-type-loitering' : 
+                    a.type === 'running' ? 'alert-type-running' : 
+                    'alert-type-breach'
+                  }`}
+                >
+                  {/* Capitalize first letter of type */}
+                  {a.type ? a.type.charAt(0).toUpperCase() + a.type.slice(1) : "Breach"}: {a.zone}
+                </div>
+              
             </div>
           </div>
         ))}

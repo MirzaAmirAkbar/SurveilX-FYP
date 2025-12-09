@@ -1,17 +1,24 @@
 import React, { useRef, useState, useEffect } from "react";
 import "./LiveFeedDisplay.css";
 
-function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
+function LiveFeedDisplay({ 
+  drawingTool, 
+  setDrawingTool,
+  drawingType, // 'RESTRICTED' or 'LOITERING'
+  setDrawingType,
+  restrictedAreas, 
+  loiteringAreas,
+  onRefreshAreas
+}) {
   const videoRef = useRef(null);
 
   // Polygon / Freehand State
-  const [polyPoints, setPolyPoints] = useState([]); // [{x,y}, ...]
+  const [polyPoints, setPolyPoints] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
-
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
+  
   const videoSrc = "http://127.0.0.1:8000/video_feed";
 
-  // Reset drawing state when tool changes
   useEffect(() => {
     setPolyPoints([]);
     setIsDragging(false);
@@ -36,17 +43,14 @@ function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
   };
 
   // --- MOUSE HANDLERS ---
-
   const handleMouseDown = (e) => {
     if (!drawingTool) return;
     e.preventDefault();
     const pos = getRelativeCoords(e);
 
     if (drawingTool === "POLYGON") {
-      // Add single point
       setPolyPoints([...polyPoints, pos]);
     } else if (drawingTool === "FREEHAND") {
-      // Start freehand stream
       setIsDragging(true);
       setPolyPoints([pos]);
     }
@@ -58,7 +62,6 @@ function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
     setCursorPos(pos);
 
     if (drawingTool === "FREEHAND" && isDragging) {
-      // Add points continuously
       setPolyPoints((prev) => [...prev, pos]);
     }
   };
@@ -66,27 +69,26 @@ function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
   const handleMouseUp = async (e) => {
     if (drawingTool === "FREEHAND" && isDragging) {
       setIsDragging(false);
-      finishPolygonShape("Freehand Area");
+      finishPolygonShape();
     }
   };
 
   const handleRightClick = async (e) => {
     e.preventDefault();
     if (drawingTool === "POLYGON") {
-      finishPolygonShape("Polygon Area");
+      finishPolygonShape();
     }
   };
 
-  const finishPolygonShape = async (defaultName) => {
+  const finishPolygonShape = async () => {
     if (polyPoints.length < 3) {
       setPolyPoints([]);
       return;
     }
 
-    // Optional: Simplify points for freehand if needed (sampling every Nth point)
-    // For now we send all points.
-
-    const name = prompt(`Enter name for this ${defaultName}:`);
+    const label = drawingType === 'RESTRICTED' ? 'Restricted Area' : 'Loitering Area';
+    const name = prompt(`Enter name for this ${label}:`);
+    
     if (name) {
       const { scaleX, scaleY } = getScale();
       const points = polyPoints.map((p) => [
@@ -98,51 +100,48 @@ function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
     }
     setPolyPoints([]);
     setDrawingTool(null);
+    setDrawingType(null);
   };
 
   const saveArea = async (payload) => {
+    // Determine Endpoint based on drawingType
+    const endpoint = drawingType === 'RESTRICTED' ? 'restricted-areas' : 'loitering-areas';
+
     try {
-      await fetch("http://127.0.0.1:8000/restricted-areas/", {
+      const response = await fetch(`http://127.0.0.1:8000/${endpoint}/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
+      if (!response.ok) {
+        alert("Failed to save area.");
+      } else {
+        if (onRefreshAreas) onRefreshAreas();
+      }
     } catch (e) {
-      console.error(e);
+      console.error("Network error saving area:", e);
     }
   };
 
   // --- RENDER HELPERS ---
-
-  const renderSavedAreas = () => {
+  
+  // Helper to render a list of areas with specific color style
+  const renderAreaList = (list, colorStroke, colorFill) => {
     const { scaleX, scaleY } = getScale();
-
-    return restrictedAreas
-      .filter((area) => area.is_active) // Only draw if active
+    return list
+      .filter((area) => area.is_active)
       .map((area) => {
-        if (area.type === "ellipse" && area.center && area.radii) {
-          return (
-            <ellipse
-              key={area.id}
-              cx={area.center[0] / scaleX}
-              cy={area.center[1] / scaleY}
-              rx={area.radii[0] / scaleX}
-              ry={area.radii[1] / scaleY}
-              fill="rgba(255, 0, 0, 0.2)"
-              stroke="red"
-              strokeWidth="2"
-            />
-          );
-        } else if (area.points) {
+        if (area.points) {
           const pts = area.points
             .map((p) => `${p[0] / scaleX},${p[1] / scaleY}`)
             .join(" ");
           return (
             <polygon
-              key={area.id}
+              key={`${area.id}-${colorStroke}`}
               points={pts}
-              fill="rgba(255, 0, 0, 0.2)"
-              stroke="red"
+              fill={colorFill}
+              stroke={colorStroke}
               strokeWidth="2"
             />
           );
@@ -151,13 +150,14 @@ function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
       });
   };
 
+  // Determine drawing line color based on active type
+  const drawColor = drawingType === 'RESTRICTED' ? '#ff0000' : '#0099ff';
+
   return (
     <div className="livefeed-container">
       <div className="detection-info">
-        {drawingTool === "POLYGON"
-          ? "Left-click to add points, Right-click to finish"
-          : drawingTool === "FREEHAND"
-          ? "Hold Left-click and drag to draw"
+        {drawingTool 
+          ? `Drawing ${drawingType === 'RESTRICTED' ? 'Restricted' : 'Loitering'} Area...` 
           : "Monitoring Active"}
       </div>
 
@@ -175,16 +175,20 @@ function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
         />
 
         <svg className="overlay-layer" style={{ pointerEvents: "none" }}>
-          {renderSavedAreas()}
+          {/* Render Restricted Areas (RED) */}
+          {renderAreaList(restrictedAreas, "red", "rgba(255, 0, 0, 0.2)")}
+          
+          {/* Render Loitering Areas (BLUE) */}
+          {renderAreaList(loiteringAreas, "#0099ff", "rgba(0, 153, 255, 0.2)")}
 
-          {/* Current Drawing */}
+          {/* Render Active Drawing Lines */}
           {(drawingTool === "POLYGON" || drawingTool === "FREEHAND") &&
             polyPoints.length > 0 && (
               <>
                 <polyline
                   points={polyPoints.map((p) => `${p.x},${p.y}`).join(" ")}
                   fill="none"
-                  stroke="#00ff00"
+                  stroke={drawColor}
                   strokeWidth="2"
                 />
                 {drawingTool === "POLYGON" && (
@@ -193,7 +197,7 @@ function LiveFeedDisplay({ drawingTool, setDrawingTool, restrictedAreas }) {
                     y1={polyPoints[polyPoints.length - 1].y}
                     x2={cursorPos.x}
                     y2={cursorPos.y}
-                    stroke="#00ff00"
+                    stroke={drawColor}
                     strokeWidth="1"
                     strokeDasharray="4"
                   />
