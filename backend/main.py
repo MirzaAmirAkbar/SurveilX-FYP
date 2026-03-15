@@ -3,7 +3,7 @@ import asyncio
 from database import (
     users_collection, 
     areas_collection, 
-    loitering_collection, # NEW IMPORT
+    loitering_collection, 
     hash_password, 
     verify_password, 
     area_helper, 
@@ -13,6 +13,10 @@ from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pd import RealTimePersonDetector 
+
+from weapon_detection import WeaponDetector # <-- NEW IMPORT
+import base64                               # <-- NEW IMPORT (if not present)
+
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Union
 from bson import ObjectId
@@ -20,8 +24,31 @@ import time
 
 app = FastAPI()
 
-VIDEO_PATH = "vid2.mp4"
+VIDEO_PATH = "gun3.mkv"
 stop_stream = False
+
+last_weapon_alert_time = 0.0      # <-- NEW GLOBAL
+WEAPON_ALERT_COOLDOWN = 5.0       # <-- NEW GLOBAL (Seconds between alerts)
+
+# --- NEW GLOBALS FOR WEAPON STATE ---
+WEAPON_FRAME_THRESHOLD = 3  # Weapon must be seen for 5 consecutive frames
+weapon_states = {}          # Tracks {pid: {'frames': 0, 'alerted': False}}
+
+def get_ioa(box1, box2):
+    """
+    Calculates Intersection over Area (IoA) of box1 (weapon) relative to itself.
+    This works better than IoU because a small weapon inside a large person
+    bbox will have low IoU, but 100% IoA.
+    """
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+    box1_area = max(0, box1[2] - box1[0]) * max(0, box1[3] - box1[1])
+
+    return inter_area / box1_area if box1_area > 0 else 0
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,21 +60,15 @@ app.add_middleware(
 
 # --- GLOBAL CACHES ---
 active_restricted_areas_cache = []
-active_loitering_areas_cache = [] # NEW CACHE
+active_loitering_areas_cache = []
 
 async def update_area_cache():
-    """
-    Refreshes both restricted and loitering area caches from the database.
-    """
     global active_restricted_areas_cache, active_loitering_areas_cache
     
     print("🔄 Refreshing area caches...")
-    
-    # Fetch Restricted
     r_cursor = areas_collection.find({"is_active": True})
     active_restricted_areas_cache = [area_helper(area) for area in await r_cursor.to_list(length=1000)]
     
-    # Fetch Loitering
     l_cursor = loitering_collection.find({"is_active": True})
     active_loitering_areas_cache = [area_helper(area) for area in await l_cursor.to_list(length=1000)]
     
@@ -57,9 +78,15 @@ async def update_area_cache():
 async def startup_event():
     await update_area_cache()
 
-print("🚀 Initializing YOLO model...")
-detector = RealTimePersonDetector(performance_mode='performance')
-print("✅ YOLO model ready!")
+print("🚀 Initializing YOLO model & Face Recognition...")
+# Initializing with default Milvus params
+detector = RealTimePersonDetector(performance_mode='performance', milvus_host="localhost", milvus_port="19530")
+print("✅ Detector ready!")
+
+
+print("🔫 Initializing Weapon Detector...")
+# Initialize the weapon detector. Ensure the model file is in the correct directory.
+weapon_detector = WeaponDetector(model_path='w1.pt', conf_threshold=0.6)
 
 # --- AUTH ENDPOINTS ---
 
@@ -111,9 +138,8 @@ async def generate_frames(request: Request):
                 print("🚪 Client disconnected.")
                 break
 
-            # Live access to caches
             restricted_zones = active_restricted_areas_cache
-            loitering_zones = active_loitering_areas_cache # Available for detection logic
+            loitering_zones = active_loitering_areas_cache 
 
             success, frame = cap.read()
             if not success:
@@ -122,7 +148,116 @@ async def generate_frames(request: Request):
                 
             detections = detector.detect_persons(frame)
             persons = detector.track_persons(detections, frame)
+
+            # --- [NEW] FACE RECOGNITION STEP ---
+            detector.recognize_identities(frame, persons)
+            # -----------------------------------
+
             frame = detector.draw_detections(frame, persons)
+            """
+            # --- [NEW] WEAPON DETECTION & VISUALIZATION ---
+            weapon_detections = weapon_detector.detect_weapons(frame)
+            frame = weapon_detector.draw_detections(frame, weapon_detections)
+
+            # --- [NEW] WEAPON ALERT LOGIC ---
+            current_time = time.time()
+            if weapon_detections and (1):
+                #last_weapon_alert_time = current_time
+                
+                # Capture the first detected weapon for the alert thumbnail
+                x1, y1, x2, y2 = weapon_detections[0]['bbox']
+                h_frame, w_frame = frame.shape[:2]
+                crop = frame[max(0, y1):min(h_frame, y2), max(0, x1):min(w_frame, x2)]
+                
+                img_b64 = ""
+                if crop.size > 0:
+                    _, buf = cv2.imencode('.jpg', crop)
+                    img_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+                    
+                weapon_alert = {
+                    'personId': "N/A", # Weapons are not tied to a specific ID yet
+                    'zone': "Global",
+                    'type': "weapon_detected",
+                    'timestamp': current_time,
+                    'imageB64': img_b64,
+                }
+                detector.alerts.append(weapon_alert)
+                print("⚠️ ALERT: Weapon detected and logged!")
+            """
+
+            # --- [NEW] WEAPON DETECTION & VISUALIZATION ---
+            weapon_detections = weapon_detector.detect_weapons(frame)
+            
+            # 1. Map Weapons to Persons
+            current_armed_pids = set()
+            for w_det in weapon_detections:
+                best_pid = None
+                best_ioa = 0.0
+
+                for pid, pdata in persons.items():
+                    ioa = get_ioa(w_det['bbox'], pdata['bbox'])
+                    # If at least 30% of the weapon is inside the person's bounding box
+                    if ioa > best_ioa and ioa > 0.3: 
+                        best_ioa = ioa
+                        best_pid = pid
+
+                if best_pid is not None:
+                    current_armed_pids.add(best_pid)
+                    w_det['person_id'] = best_pid
+                else:
+                    w_det['person_id'] = "Unknown"
+
+            # 2. Temporal Smoothing & Alerts
+            for pid in list(persons.keys()):
+                # Initialize state for new persons
+                if pid not in weapon_states:
+                    weapon_states[pid] = {'frames': 0, 'alerted': False}
+
+                if pid in current_armed_pids:
+                    # Increment counter if weapon is detected
+                    weapon_states[pid]['frames'] += 1
+
+                    # Trigger alert if threshold met and not already alerted
+                    if weapon_states[pid]['frames'] >= WEAPON_FRAME_THRESHOLD and not weapon_states[pid]['alerted']:
+                        pdata = persons[pid]
+                        x1, y1, x2, y2 = pdata['bbox']
+                        h_f, w_f = frame.shape[:2]
+                        
+                        # Crop the PERSON holding the weapon for the alert thumbnail
+                        crop = frame[max(0, y1):min(h_f, y2), max(0, x1):min(w_f, x2)]
+                        
+                        img_b64 = ""
+                        if crop.size > 0:
+                            _, buf = cv2.imencode('.jpg', crop)
+                            img_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+
+                        weapon_alert = {
+                            'personId': pid,
+                            'zone': "",
+                            'type': "weapon_detected",
+                            'timestamp': time.time(),
+                            'imageB64': img_b64,
+                        }
+                        detector.alerts.append(weapon_alert)
+                        print(f"⚠️ ALERT: Weapon confirmed for Person {pid}!")
+                        
+                        # Lock the alert so it doesn't spam
+                        weapon_states[pid]['alerted'] = True
+                else:
+                    # Decay the frame count if weapon disappears (tolerates brief flicker)
+                    weapon_states[pid]['frames'] = max(0, weapon_states[pid]['frames'] - 1)
+                    
+                    # Reset the alert lock only if they fully drop/put away the weapon
+                    if weapon_states[pid]['frames'] == 0:
+                        weapon_states[pid]['alerted'] = False
+
+            # Cleanup state for lost tracks to prevent memory leaks
+            for pid in list(weapon_states.keys()):
+                if pid not in persons and weapon_states[pid]['frames'] == 0:
+                    del weapon_states[pid]
+
+            # 3. Draw Detections
+            frame = weapon_detector.draw_detections(frame, weapon_detections)
 
             # Check Restricted Area Breaches
             breaches = detector.detect_breaches_with_ids(persons, restricted_zones)
@@ -131,16 +266,11 @@ async def generate_frames(request: Request):
                 if pdata:
                     detector.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, alert_type="breach")
 
-            # TODO: Add logic here to pass `loitering_zones` to a detector function
-            # e.g., detector.detect_loitering(persons, loitering_zones)
-
-            # 2. NEW: Loitering Zone Logic
-            # We pass the frame so the detector can crop the image if an alert happens.
-            # We pass 10.0 as the threshold seconds.
+            # Loitering Logic
             detector.detect_loitering(persons, loitering_zones, frame, time_threshold=10.0)
 
-            # 3. [NEW] Running Logic
-            detector.detect_running(persons, frame)
+            # Running Logic (Optional - commented out in your original code)
+            # detector.detect_running(persons, frame)
 
             zones_now = {zone for (_, zone) in breaches}
             breach_text = (" | ".join([f"{zone} breached" for zone in zones_now])
@@ -174,7 +304,7 @@ class AreaModel(BaseModel):
     type: str = "polygon" 
     points: Optional[List[List[int]]] = [] 
 
-# --- RESTRICTED AREA ENDPOINTS (Existing) ---
+# --- RESTRICTED AREA ENDPOINTS ---
 
 @app.post("/restricted-areas/")
 async def add_restricted_area(area: AreaModel):
@@ -211,7 +341,7 @@ async def delete_restricted_area(area_id: str):
     await update_area_cache()
     return {"status": "ok"}
 
-# --- LOITERING AREA ENDPOINTS (New) ---
+# --- LOITERING AREA ENDPOINTS ---
 
 @app.post("/loitering-areas/")
 async def add_loitering_area(area: AreaModel):
@@ -230,7 +360,7 @@ async def add_loitering_area(area: AreaModel):
         new_area["name"] = f"Loitering Zone {count + 1}"
         
     result = await loitering_collection.insert_one(new_area)
-    await update_area_cache() # Update cache immediately
+    await update_area_cache() 
     
     created = await loitering_collection.find_one({"_id": result.inserted_id})
     return {"status": "ok", "area": area_helper(created)}
@@ -248,7 +378,7 @@ async def delete_loitering_area(area_id: str):
     await update_area_cache()
     return {"status": "ok"}
 
-# --- TOGGLE ENDPOINTS (Updated for both) ---
+# --- TOGGLE ENDPOINTS ---
 
 @app.patch("/restricted-areas/{area_id}/toggle")
 async def toggle_restricted_area(area_id: str):

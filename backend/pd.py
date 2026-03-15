@@ -10,17 +10,23 @@ from typing import List, Dict, Tuple, Optional, Set, Any
 # Third-party imports
 from ultralytics import YOLO
 from cjm_byte_track.core import BYTETracker
+# --- NEW IMPORTS FOR FACE RECOGNITION ---
+from insightface.app import FaceAnalysis
+from milvus_utils import MilvusFaceDB
 
 class RealTimePersonDetector:
     """
     Handles Person Detection (YOLOv8), Tracking (ByteTrack), 
     Identity Association (Simple HSV Histogram Re-ID), and Behavior Analysis.
+    Now includes Face Recognition via Milvus.
     """
 
     def __init__(self, 
                  database_path: str = 'person_database.pkl', 
-                 model_path: str = 'yolov8m.pt', 
-                 performance_mode: str = 'performance'):
+                 model_path: str = 'yolov8s.pt', 
+                 performance_mode: str = 'balanced',
+                 milvus_host: str = "localhost",
+                 milvus_port: str = "19530"):
         
         print("\n" + "="*50)
         print(f"Initializing Person Detector (Mode: {performance_mode})")
@@ -50,7 +56,7 @@ class RealTimePersonDetector:
             target_model = model_path
 
         # --- 2. LOAD YOLO MODEL ---
-        print(f"[-] Loading Model: {target_model}")
+        print(f"[-] Loading YOLO Model: {target_model}")
         if not os.path.exists(target_model):
             if os.path.exists('yolov8n.pt'):
                 print(f"    ! Model '{target_model}' not found. Falling back to 'yolov8n.pt'.")
@@ -68,8 +74,35 @@ class RealTimePersonDetector:
             match_thresh=0.7,
             frame_rate=30
         )
+        
+        # --- 4. FACE RECOGNITION SETUP (NEW) ---
+        print("[-] Initializing Face Recognition System...")
+        self.face_rec_enabled = False
+        self.person_identities = {} # stable_id -> {name, similarity}
+        self.rec_interval = 5       # Process faces every 5 frames
+        self.min_face_size = 40
+        self.face_sim_threshold = 0.60
 
-        # --- 4. SYSTEM STATE ---
+        try:
+            # Initialize InsightFace
+            self.face_app = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"])
+            self.face_app.prepare(ctx_id=0 if self.device == 'cuda' else -1, det_size=(640, 640))
+            
+            # Initialize Milvus
+            self.milvus_db = MilvusFaceDB(
+                host=milvus_host,
+                port=milvus_port,
+                collection_name="face_embeddings",
+                embedding_dim=512
+            )
+            # Check stats to verify connection
+            stats = self.milvus_db.get_collection_stats()
+            print(f"    ✓ Connected to Milvus. Faces in DB: {stats['num_entities']}")
+            self.face_rec_enabled = True
+        except Exception as e:
+            print(f"    ✗ Face Recognition Disabled. Error: {e}")
+
+        # --- 5. SYSTEM STATE ---
         self.stable_id_features: Dict[int, np.ndarray] = {}  
         self.byte_to_stable_id: Dict[int, int] = {}          
         self.stable_id_last_seen: Dict[int, int] = {}        
@@ -78,22 +111,24 @@ class RealTimePersonDetector:
 
         self.active_breaches = set()
         self.alerts = []
+        
+        # -- Track Status for Colors --
+        self.current_breaching_ids = set()
+        self.confirmed_loiterers = set()
 
-        # --- 5. BEHAVIOR STATE ---
+        # --- 6. BEHAVIOR STATE ---
         self.loitering_state = {}
         
-        # [NEW] Running Detection State
-        self.stable_id_positions: Dict[int, deque] = {} # History of (x,y)
-        self.running_cooldowns: Dict[int, float] = {}   # Timestamp of last running alert
-        self.RUNNING_THRESHOLD = 0.15 # Body height per frame
-        self.RUNNING_ALERT_COOLDOWN = 0.0 # Seconds to wait before alerting again for same person
+        self.stable_id_positions: Dict[int, deque] = {} 
+        self.running_cooldowns: Dict[int, float] = {}   
+        self.RUNNING_THRESHOLD = 0.15 
+        self.RUNNING_ALERT_COOLDOWN = 0.0 
 
-        # Load legacy database
+        # Load legacy database (Optional, kept for compatibility)
         self.known_persons = []
         if os.path.exists(database_path):
             with open(database_path, 'rb') as f:
                 self.known_persons = pickle.load(f)
-            print(f"[-] Loaded {len(self.known_persons)} known persons.")
 
         print("-" * 50)
         print(f"Status: READY ({self.device.upper()})")
@@ -187,14 +222,13 @@ class RealTimePersonDetector:
             # Update Metadata
             self.stable_id_last_seen[stable_id] = self.frame_index
             
-            # --- [NEW] UPDATE POSITION HISTORY FOR RUNNING DETECTION ---
+            # --- POSITION HISTORY ---
             center_x = (x1 + x2) / 2
             center_y = (y1 + y2) / 2
             
             if stable_id not in self.stable_id_positions:
-                self.stable_id_positions[stable_id] = deque(maxlen=5) # Keep last 5 positions
+                self.stable_id_positions[stable_id] = deque(maxlen=5) 
             self.stable_id_positions[stable_id].append((center_x, center_y))
-            # -----------------------------------------------------------
 
             current_frame_persons[stable_id] = {
                 'bbox': (x1, y1, x2, y2),
@@ -204,47 +238,93 @@ class RealTimePersonDetector:
         self._cleanup_memory(current_byte_ids)
         return current_frame_persons
 
+    def recognize_identities(self, frame: np.ndarray, persons: Dict[int, Dict]):
+        """
+        [NEW] Runs face recognition on tracked persons.
+        Extracts face embeddings -> Searches Milvus -> Updates identity map.
+        """
+        if not self.face_rec_enabled:
+            return
+
+        # Run periodically to save FPS
+        if self.frame_index % self.rec_interval != 0:
+            return
+
+        for stable_id, pdata in persons.items():
+            # If we already have a high confidence match, skip (optional optimization)
+            # if stable_id in self.person_identities and self.person_identities[stable_id]['similarity'] > 0.8:
+            #     continue
+
+            x1, y1, x2, y2 = pdata['bbox']
+            
+            # Crop the person from the frame
+            # Add padding to ensure we capture the whole face
+            h, w = frame.shape[:2]
+            px1 = max(0, x1)
+            py1 = max(0, y1)
+            px2 = min(w, x2)
+            py2 = min(h, y2)
+            
+            person_roi = frame[py1:py2, px1:px2]
+            if person_roi.size == 0:
+                continue
+
+            # Detect faces within the person's bounding box
+            faces = self.face_app.get(person_roi)
+
+            for f in faces:
+                # Basic size filter
+                box = f.bbox
+                fw = box[2] - box[0]
+                fh = box[3] - box[1]
+                if fw < self.min_face_size or fh < self.min_face_size:
+                    continue
+
+                embedding = f.embedding
+                if embedding is not None:
+                    # Search Milvus
+                    matches = self.milvus_db.search_face(
+                        embedding=embedding,
+                        top_k=1, # We only need the best match
+                        threshold=self.face_sim_threshold
+                    )
+
+                    if matches:
+                        best_match = matches[0]
+                        self.person_identities[stable_id] = {
+                            "name": best_match["person_name"],
+                            "similarity": best_match["similarity"],
+                            "matched_stable_id": best_match["stable_id"]
+                        }
+
     def detect_running(self, persons: Dict[int, Dict], frame: np.ndarray):
-        """
-        Analyzes movement history to detect running.
-        Triggers an alert if speed exceeds threshold and cooldown has passed.
-        """
+        """Analyzes movement history to detect running."""
         current_time = time.time()
         
         for pid, pdata in persons.items():
-            # Need at least 3 frames of history
             if pid not in self.stable_id_positions or len(self.stable_id_positions[pid]) < 3:
                 continue
 
             positions = list(self.stable_id_positions[pid])
-            
-            # Calculate distance moved over stored frames
             dx = positions[-1][0] - positions[0][0]
             dy = positions[-1][1] - positions[0][1]
             dist_pixels = np.sqrt(dx**2 + dy**2)
             
             avg_dist_per_frame = dist_pixels / (len(positions) - 1)
             
-            # Normalize by body height
             x1, y1, x2, y2 = pdata['bbox']
             box_h = max(1, y2 - y1)
             speed_score = avg_dist_per_frame / box_h
             
             if speed_score > self.RUNNING_THRESHOLD:
-                # --- Check Cooldown (Debouncing) ---
                 last_alert = self.running_cooldowns.get(pid, 0)
                 if current_time - last_alert > self.RUNNING_ALERT_COOLDOWN:
-                    
-                    # Create Alert
                     self.create_alert_if_new(frame, pid, pdata['bbox'], 
                                              zone_name=f"Speed: {speed_score:.2f}", 
                                              alert_type="running")
-                    
-                    # Update cooldown
                     self.running_cooldowns[pid] = current_time
                     
-                    # Visual feedback on frame (optional)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2) # Orange box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
                     cv2.putText(frame, "RUNNING", (x1, y1 - 25), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
 
@@ -261,12 +341,15 @@ class RealTimePersonDetector:
                 self.stable_id_features.pop(sid, None)
                 self.stable_id_last_seen.pop(sid, None)
                 
-                # Clean up [NEW] states
                 self.stable_id_positions.pop(sid, None)
                 self.running_cooldowns.pop(sid, None)
                 self.loitering_state.pop(sid, None)
+                # Cleanup identities and states
+                self.person_identities.pop(sid, None)
+                self.current_breaching_ids.discard(sid)
+                self.confirmed_loiterers.discard(sid)
 
-    # --- Feature Extraction Helpers (Same as before) ---
+    # --- Feature Extraction Helpers ---
     def _extract_appearance_features(self, frame: np.ndarray, bbox: List[int]) -> Optional[np.ndarray]:
         x1, y1, x2, y2 = map(int, bbox)
         x1, y1 = max(0, x1), max(0, y1)
@@ -294,33 +377,77 @@ class RealTimePersonDetector:
         return max(0.0, np.dot(feat1_norm, feat2_norm))
 
     # --- Visualization & Utilities ---
-    def enhance_low_light(self, frame: np.ndarray, gamma: float = 1.2) -> np.ndarray:
-        try:
-            if frame.mean() > 90: return frame
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            h, s, v = cv2.split(hsv)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            v = clahe.apply(v)
-            hsv = cv2.merge([h, s, v])
-            img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-            return np.clip(((img / 255.0) ** (1.0 / gamma)) * 255.0, 0, 255).astype(np.uint8)
-        except: return frame
-
     def draw_detections(self, frame: np.ndarray, persons: Dict[int, Dict]) -> np.ndarray:
         for person_id, person_data in persons.items():
             x1, y1, x2, y2 = person_data['bbox']
-            # We skip drawing here if running logic draws its own box, but redundancy is fine
-            # Let's keep the standard green box for normal state
-            if person_id not in self.running_cooldowns or \
-               time.time() - self.running_cooldowns[person_id] > 1.0: # Only draw green if not recently running
-                color = (0, 255, 0) 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                label = f"ID {person_id}"
-                cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            
+            # --- COLOR LOGIC ---
+            # Default: Green
+            color = (0, 255, 0) 
+            label_text = f"ID {person_id}"
+            
+            # Priority 1: Breach (Red)
+            if person_id in self.current_breaching_ids:
+                color = (0, 0, 255) # Red
+                label_text = f"BREACH! ID {person_id}"
+
+            # Priority 2: Facial Recognition (Orange)
+            elif person_id in self.person_identities:
+                identity = self.person_identities[person_id]
+                name = identity['name']
+                sim = identity['similarity']
+                
+                color = (0, 165, 255) # Orange
+                label_text = f"ID {person_id}: {name}"
+                
+                # Draw similarity score below box for recognized people
+                cv2.putText(frame, f"({sim:.2f})", (x1, y2 + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+
+            # Priority 3: Loitering (Yellow)
+            elif person_id in self.confirmed_loiterers:
+                color = (0, 255, 255) # Yellow
+                label_text = f"LOITERING! ID {person_id}"
+
+            # Check if running (override color only if currently active visual cooldown)
+            if person_id in self.running_cooldowns and \
+               time.time() - self.running_cooldowns[person_id] <= 1.0:
+                 pass 
+            
+            # Draw Box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            
+            # Draw Label Background
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+            )
+            label_y = max(text_height, y1 - 5)
+            cv2.rectangle(
+                frame,
+                (x1, label_y - text_height - 5),
+                (x1 + text_width + 10, label_y + baseline),
+                color,
+                -1,
+            )
+            # Draw Text
+            cv2.putText(
+                frame,
+                label_text,
+                (x1, label_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 0), # Black text
+                2,
+                cv2.LINE_AA,
+            )
+            
         return frame
 
     def detect_breaches_with_ids(self, persons: Dict[int, Dict], areas: List[Dict]) -> List[Tuple]:
         breaches = []
+        # Clear breach state for current frame (will be repopulated)
+        self.current_breaching_ids.clear()
+        
         for area in areas:
             zone_name = area.get("name", "Restricted")
             shape_type = area.get("type", "polygon")
@@ -346,16 +473,17 @@ class RealTimePersonDetector:
                     cx, cy, rx, ry = ellipse_data
                     if rx > 0 and ry > 0:
                         if ((feet_x - cx)**2) / (rx**2) + ((feet_y - cy)**2) / (ry**2) <= 1.0: is_breach = True
-                if is_breach: breaches.append((pid, zone_name))       
+                
+                if is_breach: 
+                    breaches.append((pid, zone_name))
+                    self.current_breaching_ids.add(pid) # Mark as breaching
+                    
         return breaches
 
     def create_alert_if_new(self, frame: np.ndarray, pid: int, bbox: Tuple, zone_name: str, alert_type: str = "breach") -> Optional[Dict]:
         key = (pid, zone_name, alert_type) 
         if key in self.active_breaches: return None
         
-        # Note: We don't block running alerts here via 'active_breaches' strictly
-        # because running can happen anywhere. The 'detect_running' method handles its own cooldown.
-        # But for 'active_breaches' set logic, we add it to prevent identical duplicates in same ms.
         if alert_type != "running":
             self.active_breaches.add(key)
 
@@ -381,6 +509,8 @@ class RealTimePersonDetector:
     def detect_loitering(self, persons: Dict[int, Dict], areas: List[Dict], frame: np.ndarray, time_threshold: float = 10.0):
         current_time = time.time()
         current_loiterers = set()
+        # We will rebuild confirmed loiterers based on current state to ensure exit = green
+        self.confirmed_loiterers.clear()
 
         for pid, pdata in persons.items():
             feet_x = (pdata['bbox'][0] + pdata['bbox'][2]) // 2
@@ -414,6 +544,11 @@ class RealTimePersonDetector:
                             state['zone_name'] = zone_name; state['start_time'] = current_time; state['alerted'] = False
                         
                         duration = current_time - state['start_time']
+                        
+                        # Check if loitering logic is met for coloring
+                        if duration > time_threshold:
+                            self.confirmed_loiterers.add(pid)
+                        
                         if duration > time_threshold and not state['alerted']:
                             self.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, alert_type="loitering")
                             state['alerted'] = True
