@@ -33,6 +33,36 @@
   background: #0b0b0b0a;
 }
 
+.alert-card-breach {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border: 2px solid red;
+  border-radius: 8px;
+  background: #0b0b0b0a;
+}
+
+.alert-card-loitering {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border: 2px solid yellow;
+  border-radius: 8px;
+  background: #0b0b0b0a;
+}
+
+.alert-card-running {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #0b0b0b0a;
+}
+
 .alert-image {
   width: 88px;
   height: 88px;
@@ -66,7 +96,8 @@
 }
 
 .alert-type-loitering {
-  color: #2563eb; /* Blue */
+  color: #ffff00; /* Blue */
+  border-color: #ffff00;
 }
 
 .alert-empty {
@@ -74,5 +105,5 @@
 }
 
 .alert-type-running {
-  color: #f59e0b; /* Amber-500: A nice readable yellow/orange */
+  color: #ffff00; /* Amber-500: A nice readable yellow/orange */
 }

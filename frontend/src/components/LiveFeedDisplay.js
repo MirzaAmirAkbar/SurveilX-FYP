@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from "react";
 import "./LiveFeedDisplay.css";
 
 function LiveFeedDisplay({ 
+  selectedCamera, 
   drawingTool, 
   setDrawingTool,
   drawingType, // 'RESTRICTED' or 'LOITERING'
@@ -17,20 +18,33 @@ function LiveFeedDisplay({
   const [isDragging, setIsDragging] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
   
-  const videoSrc = "http://127.0.0.1:8000/video_feed";
+  // Determine video source based on selected camera
+  const isStaticVideo = selectedCamera === 2 || selectedCamera === 3;
+  let videoSrc;
+  
+  if (selectedCamera === 1) {
+    videoSrc = "http://127.0.0.1:8000/video_feed";
+  } else if (selectedCamera === 2) {
+    videoSrc = "/videos/aisle2.mp4";
+  } else if (selectedCamera === 3) {
+    videoSrc = "/videos/aisle3.mp4";
+  }
 
   useEffect(() => {
     setPolyPoints([]);
     setIsDragging(false);
-  }, [drawingTool]);
+  }, [drawingTool, selectedCamera]); // Reset drawing when tool or camera changes
 
   const getScale = () => {
     if (!videoRef.current) return { scaleX: 1, scaleY: 1 };
     const vid = videoRef.current;
-    const natW = vid.naturalWidth || 640;
-    const natH = vid.naturalHeight || 480;
+    
+    // Handle dimensions for both Video and Image elements
+    const natW = vid.videoWidth || vid.naturalWidth || 640;
+    const natH = vid.videoHeight || vid.naturalHeight || 480;
     const dispW = vid.clientWidth;
     const dispH = vid.clientHeight;
+    
     return { scaleX: natW / dispW, scaleY: natH / dispH };
   };
 
@@ -153,26 +167,41 @@ function LiveFeedDisplay({
   // Determine drawing line color based on active type
   const drawColor = drawingType === 'RESTRICTED' ? '#ff0000' : '#0099ff';
 
+  // Common props for both Video and Img tags
+  const mediaProps = {
+    ref: videoRef,
+    src: videoSrc,
+    className: "feed-video",
+    onMouseDown: handleMouseDown,
+    onMouseMove: handleMouseMove,
+    onMouseUp: handleMouseUp,
+    onContextMenu: handleRightClick,
+    style: { cursor: drawingTool ? "crosshair" : "default" }
+  };
+
   return (
     <div className="livefeed-container">
       <div className="detection-info">
         {drawingTool 
           ? `Drawing ${drawingType === 'RESTRICTED' ? 'Restricted' : 'Loitering'} Area...` 
-          : "Monitoring Active"}
+          : isStaticVideo ? `Playing Recording: Aisle ${selectedCamera}` : "Live Monitoring Active"}
       </div>
 
       <div className="video-wrapper">
-        <img
-          ref={videoRef}
-          src={videoSrc}
-          alt="Live feed"
-          className="feed-video"
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onContextMenu={handleRightClick}
-          style={{ cursor: drawingTool ? "crosshair" : "default" }}
-        />
+        {isStaticVideo ? (
+          <video
+            {...mediaProps}
+            autoPlay
+            loop
+            muted
+            playsInline
+          />
+        ) : (
+          <img
+            {...mediaProps}
+            alt="Live feed"
+          />
+        )}
 
         <svg className="overlay-layer" style={{ pointerEvents: "none" }}>
           {/* Render Restricted Areas (RED) */}
