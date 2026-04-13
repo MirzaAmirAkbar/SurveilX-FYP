@@ -22,6 +22,11 @@ venv/
 # YOLO model weights (too large for Git)
 *.pt
 
+# Ignore model weights
+*.pth
+*.h5
+*.pt
+
 # Ignore temporary or backup files
 *.bak
 *.tmp
