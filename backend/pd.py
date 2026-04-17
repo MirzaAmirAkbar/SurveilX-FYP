@@ -76,6 +76,7 @@ class RealTimePersonDetector:
         )
         
         # --- 4. FACE RECOGNITION SETUP (NEW) ---
+        
         print("[-] Initializing Face Recognition System...")
         self.face_rec_enabled = False
         self.person_identities = {} # stable_id -> {name, similarity}
@@ -101,6 +102,7 @@ class RealTimePersonDetector:
             self.face_rec_enabled = True
         except Exception as e:
             print(f"    ✗ Face Recognition Disabled. Error: {e}")
+        
 
         # --- 5. SYSTEM STATE ---
         self.stable_id_features: Dict[int, np.ndarray] = {}  
@@ -239,63 +241,66 @@ class RealTimePersonDetector:
         return current_frame_persons
 
     def recognize_identities(self, frame: np.ndarray, persons: Dict[int, Dict]):
-        """
-        [NEW] Runs face recognition on tracked persons.
-        Extracts face embeddings -> Searches Milvus -> Updates identity map.
-        """
         if not self.face_rec_enabled:
             return
 
-        # Run periodically to save FPS
+        # Process every N frames to keep FPS high
         if self.frame_index % self.rec_interval != 0:
             return
 
         for stable_id, pdata in persons.items():
-            # If we already have a high confidence match, skip (optional optimization)
-            # if stable_id in self.person_identities and self.person_identities[stable_id]['similarity'] > 0.8:
-            #     continue
-
-            x1, y1, x2, y2 = pdata['bbox']
-            
-            # Crop the person from the frame
-            # Add padding to ensure we capture the whole face
-            h, w = frame.shape[:2]
-            px1 = max(0, x1)
-            py1 = max(0, y1)
-            px2 = min(w, x2)
-            py2 = min(h, y2)
-            
-            person_roi = frame[py1:py2, px1:px2]
-            if person_roi.size == 0:
+            # If we already identified them in this session with high confidence, skip
+            if stable_id in self.person_identities and self.person_identities[stable_id]['similarity'] > 0.85:
                 continue
 
-            # Detect faces within the person's bounding box
+            x1, y1, x2, y2 = pdata['bbox']
+            h, w = frame.shape[:2]
+            person_roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            
+            if person_roi.size == 0: continue
+
+            # 1. Detect faces inside the person's bounding box
             faces = self.face_app.get(person_roi)
 
             for f in faces:
-                # Basic size filter
+                # Filter out small/blurry faces
                 box = f.bbox
-                fw = box[2] - box[0]
-                fh = box[3] - box[1]
-                if fw < self.min_face_size or fh < self.min_face_size:
-                    continue
+                if (box[2] - box[0]) < self.min_face_size: continue
 
                 embedding = f.embedding
-                if embedding is not None:
-                    # Search Milvus
-                    matches = self.milvus_db.search_face(
-                        embedding=embedding,
-                        top_k=1, # We only need the best match
-                        threshold=self.face_sim_threshold
-                    )
+                
+                # 2. Search Milvus for a match
+                matches = self.milvus_db.search_face(
+                    embedding=embedding,
+                    top_k=1,
+                    threshold=self.face_sim_threshold
+                )
 
-                    if matches:
-                        best_match = matches[0]
-                        self.person_identities[stable_id] = {
-                            "name": best_match["person_name"],
-                            "similarity": best_match["similarity"],
-                            "matched_stable_id": best_match["stable_id"]
-                        }
+                if matches:
+                    # MATCH FOUND: Update their identity
+                    best_match = matches[0]
+                    self.person_identities[stable_id] = {
+                        "name": best_match["person_name"],
+                        "similarity": best_match["similarity"]
+                    }
+                    print(f"✨ Match Found: {best_match['person_name']} ({best_match['similarity']:.2f})")
+                else:
+                    # NO MATCH: Add to Database automatically
+                    new_name = f"Person_{stable_id}" # Or handle naming via frontend later
+                    self.milvus_db.insert_face(
+                        embedding=embedding,
+                        stable_id=stable_id,
+                        frame_number=self.frame_index,
+                        bbox=(int(x1), int(y1), int(x2), int(y2)),
+                        person_name=new_name
+                    )
+                    
+                    # Update local state so the UI shows the new ID immediately
+                    self.person_identities[stable_id] = {
+                        "name": new_name,
+                        "similarity": 1.0
+                    }
+                    print(f"🆕 New Face Registered: {new_name}")
 
     def detect_running(self, persons: Dict[int, Dict], frame: np.ndarray):
         """Analyzes movement history to detect running."""
