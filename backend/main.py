@@ -308,6 +308,8 @@ async def generate_frames(request: Request):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Loop video if it ends
                 continue
 
+            clean_frame = frame.copy()
+
             # ----------------------------------------------------
             # STEP 1: SHOPLIFTING BUFFERING & INFERENCE TRIGGER
             # ----------------------------------------------------
@@ -338,7 +340,7 @@ async def generate_frames(request: Request):
             detections = detector.detect_persons(frame)
             persons = detector.track_persons(detections, frame)
             
-            #detector.recognize_identities(frame, persons)
+            detector.recognize_identities(clean_frame, persons)
             detector.draw_detections(frame, persons)
 
             # ----------------------------------------------------
@@ -417,8 +419,8 @@ async def generate_frames(request: Request):
                         if not state["alerted"]:
                             # Crop item image for alert
                             x1, y1, x2, y2 = map(int, bbox)
-                            h_f, w_f = frame.shape[:2]
-                            crop = frame[max(0, y1):min(h_f, y2), max(0, x1):min(w_f, x2)]
+                            h_f, w_f = clean_frame.shape[:2]
+                            crop = clean_frame[max(0, y1):min(h_f, y2), max(0, x1):min(w_f, x2)]
                             img_b64 = ""
                             if crop.size > 0:
                                 _, buf = cv2.imencode('.jpg', crop)
@@ -490,8 +492,8 @@ async def generate_frames(request: Request):
                         # Generate weapon alert
                         pdata = persons[pid]
                         x1, y1, x2, y2 = pdata['bbox']
-                        h_f, w_f = frame.shape[:2]
-                        crop = frame[max(0, y1):min(h_f, y2), max(0, x1):min(w_f, x2)]
+                        h_f, w_f = clean_frame.shape[:2]
+                        crop = clean_frame[max(0, y1):min(h_f, y2), max(0, x1):min(w_f, x2)]
                         
                         img_b64 = ""
                         if crop.size > 0:
@@ -528,9 +530,9 @@ async def generate_frames(request: Request):
             for pid, zone_name in breaches:
                 pdata = persons.get(pid)
                 if pdata:
-                    detector.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="breach")
+                    detector.create_alert_if_new(clean_frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="breach")
 
-            detector.detect_loitering(persons, loitering_zones, frame, camera_name, time_threshold=10.0)
+            detector.detect_loitering(persons, loitering_zones, clean_frame, camera_name, time_threshold=10.0)
 
 
             # ----------------------------------------------------

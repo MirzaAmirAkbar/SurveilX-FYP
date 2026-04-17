@@ -30,7 +30,6 @@ function AlertsPanel() {
     }
   };
 
-  // Helper to format timestamp (assumes Unix or ISO string)
   const formatTime = (ts) => {
     const date = new Date(ts);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -48,17 +47,20 @@ function AlertsPanel() {
 
           return (
             <div key={`${a.personId}-${a.timestamp}-${idx}`} className={`alert-card ${theme.border}`}>
-              <img className="alert-image" src={imageSrc} onClick={() => setSelectedImage(imageSrc)} />
+              <img 
+                className="alert-image" 
+                src={imageSrc} 
+                alt="Alert Thumbnail"
+                onClick={() => setSelectedImage(imageSrc)} 
+              />
               
               <div className="alert-meta">
                 <div className={`alert-heading ${theme.text}`}>
                   {a.type ? a.type.toUpperCase().replace('_', ' ') : "BREACH"}
                 </div>
                 
-                {/* Corrected: Showing Camera Name (Filename) */}
                 <div className="alert-detail"><strong>Camera:</strong> {a.camera || "Main Entry"}</div>
                 
-                {/* Added: Conditional Zone Display for Breach and Loitering */}
                 {(a.type === 'breach' || a.type === 'loitering') && (
                   <div className="alert-detail"><strong>Zone:</strong> {a.zone}</div>
                 )}
@@ -70,7 +72,18 @@ function AlertsPanel() {
           );
         })}
       </div>
-      {/* ... modal logic */}
+
+      {/* --- FIXED MODAL LOGIC BELOW --- */}
+      {selectedImage && (
+        <div className="image-modal-overlay" onClick={() => setSelectedImage(null)}>
+          <img 
+            className="full-image" 
+            src={selectedImage} 
+            alt="Full Alert" 
+            onClick={(e) => e.stopPropagation()} // Prevents closing when clicking the image itself
+          />
+        </div>
+      )}
     </div>
   );
 }
