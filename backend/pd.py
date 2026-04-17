@@ -383,43 +383,54 @@ class RealTimePersonDetector:
         return max(0.0, np.dot(feat1_norm, feat2_norm))
 
     # --- Visualization & Utilities ---
-    def draw_detections(self, frame: np.ndarray, persons: Dict[int, Dict]) -> np.ndarray:
+    def draw_detections(self, frame: np.ndarray, persons: Dict[int, Dict], 
+                    armed_pids: Set[int] = set(), 
+                    bag_owner_pids: Set[int] = set(),
+                    abandoned_owner_pids: Set[int] = set()) -> np.ndarray: # Add this parameter
+        """
+        Updated priority-based color system:
+        1. Red: Breach, Weapon, OR Abandoned Bag Owner
+        2. Orange: Face Recognized
+        3. Yellow: Loitering OR Carrying a Bag (Normal)
+        4. Green: Default
+        """
         for person_id, person_data in persons.items():
             x1, y1, x2, y2 = person_data['bbox']
             
-            # --- COLOR LOGIC ---
-            # Default: Green
-            color = (0, 255, 0) 
-            label_text = f"ID {person_id}"
+            # --- UPDATED PRIORITY COLOR LOGIC ---
             
-            # Priority 1: Breach (Red)
-            if person_id in self.current_breaching_ids:
+            # PRIORITY 1: RED (Breach, Weapon, or Abandoned Bag Owner)
+            if (person_id in self.current_breaching_ids or 
+                person_id in armed_pids or 
+                person_id in abandoned_owner_pids):
+                
                 color = (0, 0, 255) # Red
-                label_text = f"BREACH! ID {person_id}"
+                if person_id in abandoned_owner_pids:
+                    reason = "ABANDONED OWNER"
+                elif person_id in armed_pids:
+                    reason = "WEAPON"
+                else:
+                    reason = "BREACH"
+                label_text = f"{reason}! ID {person_id}"
 
-            # Priority 2: Facial Recognition (Orange)
+            # PRIORITY 2: ORANGE (Facial Recognition)
             elif person_id in self.person_identities:
-                identity = self.person_identities[person_id]
-                name = identity['name']
-                sim = identity['similarity']
-                
-                color = (0, 165, 255) # Orange
-                label_text = f"ID {person_id}: {name}"
-                
-                # Draw similarity score below box for recognized people
-                cv2.putText(frame, f"({sim:.2f})", (x1, y2 + 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+                # ... existing orange logic ...
+                color = (0, 165, 255)
+                label_text = f"ID {person_id}: {self.person_identities[person_id]['name']}"
 
-            # Priority 3: Loitering (Yellow)
-            elif person_id in self.confirmed_loiterers:
+            # PRIORITY 3: YELLOW (Loitering or Normal Bag Owner)
+            elif person_id in self.confirmed_loiterers or person_id in bag_owner_pids:
                 color = (0, 255, 255) # Yellow
-                label_text = f"LOITERING! ID {person_id}"
+                reason = "LOITERING" if person_id in self.confirmed_loiterers else "BAG"
+                label_text = f"{reason} ID {person_id}"
 
-            # Check if running (override color only if currently active visual cooldown)
-            if person_id in self.running_cooldowns and \
-               time.time() - self.running_cooldowns[person_id] <= 1.0:
-                 pass 
-            
+            # PRIORITY 4: GREEN (Default)
+            else:
+                color = (0, 255, 0) # Green
+                label_text = f"ID {person_id}"
+
+            # --- DRAWING ---
             # Draw Box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             
@@ -436,16 +447,8 @@ class RealTimePersonDetector:
                 -1,
             )
             # Draw Text
-            cv2.putText(
-                frame,
-                label_text,
-                (x1, label_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 0, 0), # Black text
-                2,
-                cv2.LINE_AA,
-            )
+            cv2.putText(frame, label_text, (x1, label_y), cv2.FONT_HERSHEY_SIMPLEX, 
+                        0.6, (0, 0, 0), 2, cv2.LINE_AA)
             
         return frame
 

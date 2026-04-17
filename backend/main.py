@@ -146,9 +146,16 @@ box_annotator = sv.BoxAnnotator()
 label_annotator = sv.LabelAnnotator()
 
 # --- CHANGED: Force a single Orange color for all items ---
-bag_color = sv.Color.from_hex("#008080")
+bag_color = sv.Color.YELLOW
 box_annotator = sv.BoxAnnotator(color=bag_color)
 label_annotator = sv.LabelAnnotator(color=bag_color)
+
+# ADDED: text_color=sv.Color.BLACK to make it readable on yellow
+label_annotator = sv.LabelAnnotator(
+    color=bag_color, 
+    text_color=sv.Color.BLACK,
+    text_thickness=2
+)
 
 print("✅ Item Detector ready!")
 
@@ -340,14 +347,16 @@ async def generate_frames(request: Request):
             detections = detector.detect_persons(frame)
             persons = detector.track_persons(detections, frame)
             
-            detector.recognize_identities(clean_frame, persons)
-            detector.draw_detections(frame, persons)
+            #detector.recognize_identities(clean_frame, persons)
+            # Identify PIDs that should trigger Yellow (Bags) or Red (Weapons)
+            
 
             # ----------------------------------------------------
             # STEP 3: ITEM DETECTION & ABANDONMENT LOGIC
             # ----------------------------------------------------
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             item_detections = rfdetr_model.predict(rgb_frame, threshold=0.45)
+            abandoned_owner_pids = set()
 
             # Filter out non-target categories (e.g., keep only bags, phones)
             mask = np.array([COCO_CLASSES[class_id] in TARGET_CATEGORIES for class_id in item_detections.class_id], dtype=bool)
@@ -404,7 +413,21 @@ async def generate_frames(request: Request):
 
                 # Assign ownership if the item was recently moving and someone is close
                 if state["frames_stationary"] < 15 and min_dist < OWNER_ASSIGNMENT_DISTANCE:
-                    state["owner_id"] = closest_pid
+                    # NEW: Trigger alert when a bag is first associated with a person
+                    if state["owner_id"] is None and closest_pid is not None:
+                        state["owner_id"] = closest_pid
+                        # Generate "Person with Bag" alert
+                        detector.create_alert_if_new(
+                            clean_frame, 
+                            closest_pid, 
+                            persons[closest_pid]['bbox'], 
+                            zone_name="N/A", 
+                            camera_name=camera_name, 
+                            alert_type="person_with_bag"
+                        )
+                        print(f"👜 Alert: Person {closest_pid} is now carrying a bag.")
+                    else:
+                        state["owner_id"] = closest_pid
 
                 # Check for Abandonment
                 if state["frames_stationary"] > STATIONARY_THRESHOLD_FRAMES:
@@ -415,6 +438,10 @@ async def generate_frames(request: Request):
                     # Trigger alert if BOTH the owner is far away AND no other person is near
                     if min_dist > ABANDONED_DISTANCE_PIXELS and owner_dist > ABANDONED_DISTANCE_PIXELS:
                         state["status"] = "⚠️ ABANDONED"
+
+                        # NEW: Add owner to the red-list if the bag is abandoned
+                        if state["owner_id"]:
+                            abandoned_owner_pids.add(state["owner_id"])
                         
                         if not state["alerted"]:
                             # Crop item image for alert
@@ -451,11 +478,24 @@ async def generate_frames(request: Request):
                     if item_states[t_id]["lost_frames"] > ITEM_PATIENCE_FRAMES:
                         del item_states[t_id]
 
-            # Draw Item Annotations
-            frame = box_annotator.annotate(scene=frame, detections=item_detections)
-            if len(item_detections) > 0:
-                frame = label_annotator.annotate(scene=frame, detections=item_detections, labels=custom_labels)
+            # 2. Update the Drawing Logic for Items to support Red/Yellow
+            # Instead of one global annotation, we split them by status
+            abandoned_mask = np.array([item_states[tid]["status"] == "⚠️ ABANDONED" for tid in item_detections.tracker_id], dtype=bool)
 
+            # Draw Abandoned Items (Red)
+            if np.any(abandoned_mask):
+                red_annotator = sv.BoxAnnotator(color=sv.Color.RED)
+                red_labeler = sv.LabelAnnotator(color=sv.Color.RED, text_color=sv.Color.WHITE)
+                frame = red_annotator.annotate(scene=frame, detections=item_detections[abandoned_mask])
+                frame = red_labeler.annotate(scene=frame, detections=item_detections[abandoned_mask], 
+                                            labels=[l for i, l in enumerate(custom_labels) if abandoned_mask[i]])
+
+            # Draw Normal Items (Yellow)
+            normal_mask = ~abandoned_mask
+            if np.any(normal_mask):
+                frame = box_annotator.annotate(scene=frame, detections=item_detections[normal_mask])
+                frame = label_annotator.annotate(scene=frame, detections=item_detections[normal_mask], 
+                                                labels=[l for i, l in enumerate(custom_labels) if normal_mask[i]])
 
             # ----------------------------------------------------
             # STEP 4: WEAPON DETECTION LOGIC
@@ -522,6 +562,17 @@ async def generate_frames(request: Request):
                     del weapon_states[pid]
 
             frame = weapon_detector.draw_detections(frame, weapon_detections)
+
+            armed_pids = {pid for pid, state in weapon_states.items() if state['alerted']}
+            bag_owner_pids = {state['owner_id'] for state in item_states.values() if state['owner_id'] is not None}
+            # --- UPDATED CALL: Pass the sets to the detector ---
+            detector.draw_detections(
+                frame, 
+                persons, 
+                armed_pids=armed_pids, 
+                bag_owner_pids=bag_owner_pids,
+                abandoned_owner_pids=abandoned_owner_pids # NEW ARGUMENT
+            )
 
             # ----------------------------------------------------
             # STEP 5: ZONE BREACH & LOITERING CHECKS

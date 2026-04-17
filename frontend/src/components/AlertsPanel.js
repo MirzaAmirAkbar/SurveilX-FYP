@@ -26,6 +26,7 @@ function AlertsPanel() {
       case 'breach': return { border: 'red-border', text: 'text-red' };
       case 'running': return { border: 'orange-border', text: 'text-orange' };
       case 'loitering': return { border: 'yellow-border', text: 'text-yellow' };
+      case 'person_with_bag': return { border: 'yellow-border', text: 'text-yellow' };
       default: return { border: 'red-border', text: 'text-red' };
     }
   };
