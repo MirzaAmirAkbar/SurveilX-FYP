@@ -2,7 +2,7 @@
 # SECTION 1: IMPORTS
 # ==========================================
 
-from fastapi.encoders import jsonable_encoder # IMPORTANT: Add this import at the top
+
 
 # 1.1 Standard Library Imports
 import os
@@ -16,9 +16,10 @@ import threading
 from typing import Optional, List
 
 # 1.2 FastAPI & Web Imports
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.encoders import jsonable_encoder # IMPORTANT: Add this import at the top
 
 # 1.3 Database & Data Validation Imports (Pydantic / MongoDB)
 from pydantic import BaseModel, EmailStr
@@ -716,6 +717,67 @@ async def get_alerts(limit: int = 50):
     
     # jsonable_encoder converts datetime objects into ISO strings for the frontend
     return JSONResponse(content={"alerts": jsonable_encoder(alerts)})
+
+
+@app.get("/api/alerts/history")
+async def get_alerts_history(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    alert_type: Optional[str] = Query("All", alias="type"),
+    camera: Optional[str] = Query("All"),
+    risk_level: Optional[str] = Query("All", alias="risk"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, le=500)
+):
+    """Fetch historical alerts with dynamic database-level filtering."""
+    query = {}
+    
+    # 1. Date Filtering
+    if start_date or end_date:
+        query["timestamp"] = {}
+        if start_date:
+            query["timestamp"]["$gte"] = start_date
+        if end_date:
+            # If end_date is provided, we want to include the whole day.
+            # We can rely on the frontend sending the end of the day or just strictly evaluate.
+            query["timestamp"]["$lte"] = end_date
+
+    # 2. Exact Match Filtering
+    if alert_type and alert_type != "All":
+        query["type"] = alert_type
+        
+    if camera and camera != "All":
+        query["camera"] = camera
+        
+    # 3. Risk Level Mapping
+    # If the user selects a risk level but NOT a specific type, we filter by a list of types.
+    if risk_level and risk_level != "All" and alert_type == "All":
+        red_types = ["breach", "weapon_detected", "abandoned_object", "shoplifting"]
+        yellow_types = ["person_with_bag", "loitering"]
+        
+        if risk_level.lower() == "red":
+            query["type"] = {"$in": red_types}
+        elif risk_level.lower() == "yellow":
+            query["type"] = {"$in": yellow_types}
+
+    # Execute the query against MongoDB
+    cursor = alerts_collection.find(query).sort("timestamp", -1).skip(skip).limit(limit)
+    
+    alerts = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        alerts.append(doc)
+        
+    # Fetch total count so the frontend knows how many pages exist
+    total_count = await alerts_collection.count_documents(query)
+    
+    return JSONResponse(content={
+        "alerts": jsonable_encoder(alerts),
+        "total": total_count,
+        "skip": skip,
+        "limit": limit
+    })
+
 
 
 # ==========================================

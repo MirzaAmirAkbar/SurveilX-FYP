@@ -5,6 +5,7 @@
   justify-content: space-between;
   padding: 1.5rem 2rem;
   border-bottom: 1px solid hsl(222, 47%, 23%);
+  position: relative; /* <-- ADD THIS */
 }
 
 .navbar-left {
@@ -13,6 +14,38 @@
   gap: 0.75rem;
   color: white;
 }
+
+/* Add these below your existing .navbar-left styles */
+/* Update your existing .navbar-center */
+.navbar-center {
+  position: absolute; /* <-- Force perfect centering */
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+}
+
+.nav-link {
+  color: hsl(220, 10%, 65%);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 1rem;
+  padding: 0.5rem 0;
+  transition: color 0.2s ease, border-color 0.2s ease;
+  border-bottom: 2px solid transparent; /* Hidden by default */
+}
+
+.nav-link:hover {
+  color: white;
+}
+
+.nav-link.active {
+  color: hsl(210, 100%, 60%); /* Your signature blue */
+  border-bottom: 2px solid hsl(210, 100%, 60%);
+}
+
+
 
 .navbar-icon {
   color: #60a5fa; /* light blue for contrast */
