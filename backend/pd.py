@@ -302,7 +302,7 @@ class RealTimePersonDetector:
                     }
                     print(f"🆕 New Face Registered: {new_name}")
 
-    def detect_running(self, persons: Dict[int, Dict], frame: np.ndarray):
+    def detect_running(self, persons: Dict[int, Dict], frame: np.ndarray, camera_name: str):
         """Analyzes movement history to detect running."""
         current_time = time.time()
         
@@ -325,8 +325,9 @@ class RealTimePersonDetector:
                 last_alert = self.running_cooldowns.get(pid, 0)
                 if current_time - last_alert > self.RUNNING_ALERT_COOLDOWN:
                     self.create_alert_if_new(frame, pid, pdata['bbox'], 
-                                             zone_name=f"Speed: {speed_score:.2f}", 
-                                             alert_type="running")
+                                         zone_name="General Flow", 
+                                         camera_name=camera_name, # Added
+                                         alert_type="running")
                     self.running_cooldowns[pid] = current_time
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
@@ -485,7 +486,7 @@ class RealTimePersonDetector:
                     
         return breaches
 
-    def create_alert_if_new(self, frame: np.ndarray, pid: int, bbox: Tuple, zone_name: str, alert_type: str = "breach") -> Optional[Dict]:
+    def create_alert_if_new(self, frame: np.ndarray, pid: int, bbox: Tuple, zone_name: str, camera_name: str, alert_type: str = "breach") -> Optional[Dict]:
         key = (pid, zone_name, alert_type) 
         if key in self.active_breaches: return None
         
@@ -502,16 +503,17 @@ class RealTimePersonDetector:
         img_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
         
         alert = {
-            'personId': pid,
-            'zone': zone_name,
-            'type': alert_type,
-            'timestamp': time.time(),
-            'imageB64': img_b64,
-        }
+        'personId': pid,
+        'camera': camera_name,  # New field for video filename
+        'zone': zone_name,      # Specific zone within that camera
+        'type': alert_type,
+        'timestamp': time.time(),
+        'imageB64': img_b64,
+    }
         self.alerts.append(alert)
         return alert
     
-    def detect_loitering(self, persons: Dict[int, Dict], areas: List[Dict], frame: np.ndarray, time_threshold: float = 10.0):
+    def detect_loitering(self, persons: Dict[int, Dict], areas: List[Dict], frame: np.ndarray, camera_name: str, time_threshold: float = 10.0):
         current_time = time.time()
         current_loiterers = set()
         # We will rebuild confirmed loiterers based on current state to ensure exit = green
@@ -555,7 +557,7 @@ class RealTimePersonDetector:
                             self.confirmed_loiterers.add(pid)
                         
                         if duration > time_threshold and not state['alerted']:
-                            self.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, alert_type="loitering")
+                            self.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="loitering") # Added camera_name
                             state['alerted'] = True
                     break 
 

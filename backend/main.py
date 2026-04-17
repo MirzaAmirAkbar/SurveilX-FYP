@@ -79,7 +79,7 @@ is_shoplifting_inferencing = False     # Prevents overlapping inference threads
 
 # --- Weapon Detection Constants ---
 WEAPON_ALERT_COOLDOWN = 5.0      
-WEAPON_FRAME_THRESHOLD = 3       # Weapon must be seen for 3 consecutive frames to trigger alert
+WEAPON_FRAME_THRESHOLD = 4       # Weapon must be seen for 3 consecutive frames to trigger alert
 
 # Dictionary to track weapon possession state per person
 # Format: {pid: {'frames': 0, 'alerted': False}}
@@ -191,7 +191,7 @@ async def startup_event():
 # SECTION 6: BACKGROUND TASKS
 # ==========================================
 
-def run_shoplifting_inference(frames_to_process, current_time):
+def run_shoplifting_inference(frames_to_process, current_time, camera_name):
     """
     Executes shoplifting inference on a sequence of frames in a separate thread.
     This prevents the main video stream from freezing during heavy computation.
@@ -215,6 +215,7 @@ def run_shoplifting_inference(frames_to_process, current_time):
             # Append alert to global detector log
             alert = {
                 'personId': "Unknown", 
+                'camera': camera_name, # Added
                 'zone': "Global",
                 'type': f"shoplifting_{event_type.lower()}",
                 'timestamp': current_time,
@@ -255,6 +256,9 @@ async def generate_frames(request: Request):
                 break
 
             global shoplifting_frame_buffer, is_shoplifting_inferencing, shoplifting_alert_cooldown_frames, shoplifting_current_status, item_tracker
+
+            # Extract filename from path
+            camera_name = os.path.basename(VIDEO_PATH)
 
             # --- HOT SWAP LOGIC ---
             if reset_trackers_flag:
@@ -308,7 +312,7 @@ async def generate_frames(request: Request):
             # STEP 1: SHOPLIFTING BUFFERING & INFERENCE TRIGGER
             # ----------------------------------------------------
            
-            
+            '''
             # Maintain a sliding window buffer of the last INPUT_FRAMES (e.g., 64)
             shoplifting_frame_buffer.append(frame.copy())
             if len(shoplifting_frame_buffer) > INPUT_FRAMES:
@@ -323,11 +327,10 @@ async def generate_frames(request: Request):
                     current_time = time.time()
                     
                     # Offload inference to background thread
-                    threading.Thread(
-                        target=run_shoplifting_inference, 
-                        args=(frames_copy, current_time), 
+                    threading.Thread(target=run_shoplifting_inference, args=(frames_copy, current_time, camera_name), 
                         daemon=True
                     ).start()
+                    '''
 
             # ----------------------------------------------------
             # STEP 2: PERSON DETECTION & TRACKING
@@ -336,7 +339,7 @@ async def generate_frames(request: Request):
             persons = detector.track_persons(detections, frame)
             
             #detector.recognize_identities(frame, persons)
-            #detector.draw_detections(frame, persons)
+            detector.draw_detections(frame, persons)
 
             # ----------------------------------------------------
             # STEP 3: ITEM DETECTION & ABANDONMENT LOGIC
@@ -423,6 +426,7 @@ async def generate_frames(request: Request):
 
                             alert = {
                                 'personId': state["owner_id"] if state["owner_id"] else "Unknown",
+                                'camera': camera_name, # Added
                                 'zone': "Global",
                                 'type': "abandoned_object",
                                 'timestamp': time.time(),
@@ -496,7 +500,8 @@ async def generate_frames(request: Request):
 
                         weapon_alert = {
                             'personId': pid,
-                            'zone': "",
+                            'camera': camera_name, # Added
+                            'zone': "N/A",
                             'type': "weapon_detected",
                             'timestamp': time.time(),
                             'imageB64': img_b64,
@@ -523,9 +528,9 @@ async def generate_frames(request: Request):
             for pid, zone_name in breaches:
                 pdata = persons.get(pid)
                 if pdata:
-                    detector.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, alert_type="breach")
+                    detector.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="breach")
 
-            detector.detect_loitering(persons, loitering_zones, frame, time_threshold=10.0)
+            detector.detect_loitering(persons, loitering_zones, frame, camera_name, time_threshold=10.0)
 
 
             # ----------------------------------------------------

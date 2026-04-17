@@ -63,12 +63,20 @@
   background: #0b0b0b0a;
 }
 
+/* Update the existing .alert-image class */
 .alert-image {
   width: 88px;
   height: 88px;
   object-fit: cover;
+  object-position: top; /* Prioritizes the top of the image (faces) */
   border-radius: 6px;
   border: 1px solid #d1d5db;
+  cursor: pointer; /* Indicates the image is clickable */
+  transition: transform 0.2s;
+}
+
+.alert-image:hover {
+  transform: scale(1.05);
 }
 
 .alert-meta {
@@ -106,4 +114,64 @@
 
 .alert-type-running {
   color: #ffff00; /* Amber-500: A nice readable yellow/orange */
+}
+
+/* Color Schemes for Card Borders */
+.alert-card.red-border { border: 2px solid #ef4444; }
+.alert-card.orange-border { border: 2px solid #f97316; }
+.alert-card.yellow-border { border: 2px solid #eab308; }
+
+/* Alert Type Text Colors */
+.text-red { color: #ef4444; font-weight: 700; }
+.text-orange { color: #f97316; font-weight: 700; }
+.text-yellow { color: #eab308; font-weight: 700; }
+
+/* Enhanced Modal Overlay */
+.image-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.9); /* Darker background for better focus */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999; /* Ensure it's above everything */
+  padding: 20px;
+  cursor: zoom-out;
+}
+
+/* Force the image to occupy more screen real estate */
+.full-image {
+  /* This forces the image to fill 85% of the screen width or 90% of height */
+  width: 85vw; 
+  height: 90vh;
+  
+  /* 'contain' ensures the aspect ratio is kept without cropping or stretching */
+  object-fit: contain; 
+  
+  border-radius: 4px;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  
+  /* Smooth transition for when it pops up */
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.alert-heading {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.alert-detail {
+  font-size: 0.8rem;
+  line-height: 1.3;
 }
