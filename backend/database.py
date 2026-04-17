@@ -20,6 +20,7 @@ database = client[MONGO_DB_NAME]
 users_collection = database.get_collection("users")
 areas_collection = database.get_collection("restricted_areas")
 loitering_collection = database.get_collection("loitering_areas") # NEW: Collection for loitering
+alerts_collection = database.get_collection("alerts") # NEW: Collection for persistent alerts
 
 # --- Utility Functions ---
 

@@ -2,10 +2,13 @@
 # SECTION 1: IMPORTS
 # ==========================================
 
+from fastapi.encoders import jsonable_encoder # IMPORTANT: Add this import at the top
+
 # 1.1 Standard Library Imports
 import os
 import sys
 import time
+from datetime import datetime
 import math
 import base64
 import asyncio
@@ -24,6 +27,7 @@ from database import (
     users_collection, 
     areas_collection, 
     loitering_collection, 
+    alerts_collection,
     hash_password, 
     verify_password, 
     area_helper, 
@@ -52,6 +56,8 @@ from Shoplifting.config import WEIGHT_FILE, SLIDING_WINDOW_STEP, INPUT_FRAMES
 # ==========================================
 # SECTION 2: GLOBAL CONSTANTS & STATE
 # ==========================================
+
+SERVER_START_TIME = datetime.now() # Marks the start of the current session
 
 # --- General Stream Settings ---
 VIDEO_PATH = "test_videos/shoplifting-36.mp4"
@@ -94,6 +100,15 @@ active_loitering_areas_cache = []
 # ==========================================
 # SECTION 3: HELPER FUNCTIONS
 # ==========================================
+
+# Add this helper function near the top of Section 3
+async def save_alert(alert_data: dict):
+    """Saves an alert to MongoDB."""
+    try:
+        if alert_data:
+            await alerts_collection.insert_one(alert_data)
+    except Exception as e:
+        print(f"Error saving alert to DB: {e}")
 
 def get_center_distance(box1, box2):
     """
@@ -225,9 +240,16 @@ def run_shoplifting_inference(frames_to_process, current_time, camera_name):
                 'camera': camera_name, # Added
                 'zone': "Global",
                 'type': f"shoplifting_{event_type.lower()}",
-                'timestamp': current_time,
+                'timestamp': datetime.now(), # USE DATETIME
                 'imageB64': img_b64,
             }
+
+            # Bridge to async DB insert
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(save_alert(alert))
+            loop.close()
+
             detector.alerts.append(alert)
             print(f"⚠️ ALERT: Shoplifting Detected! Type: {event_type}, Confidence: {theft_conf*100:.1f}%")
             
@@ -417,7 +439,7 @@ async def generate_frames(request: Request):
                     if state["owner_id"] is None and closest_pid is not None:
                         state["owner_id"] = closest_pid
                         # Generate "Person with Bag" alert
-                        detector.create_alert_if_new(
+                        new_bag_alert = detector.create_alert_if_new(
                             clean_frame, 
                             closest_pid, 
                             persons[closest_pid]['bbox'], 
@@ -425,6 +447,9 @@ async def generate_frames(request: Request):
                             camera_name=camera_name, 
                             alert_type="person_with_bag"
                         )
+                        if new_bag_alert:
+                            await save_alert(new_bag_alert)
+
                         print(f"👜 Alert: Person {closest_pid} is now carrying a bag.")
                     else:
                         state["owner_id"] = closest_pid
@@ -458,9 +483,12 @@ async def generate_frames(request: Request):
                                 'camera': camera_name, # Added
                                 'zone': "Global",
                                 'type': "abandoned_object",
-                                'timestamp': time.time(),
+                                'timestamp': datetime.now(), # USE DATETIME
                                 'imageB64': img_b64,
                             }
+                            await save_alert(alert) # SAVE TO DB
+                            state["alerted"] = True
+
                             detector.alerts.append(alert)
                             state["alerted"] = True
                             print(f"⚠️ ALERT: Abandoned {class_name} (ID: {track_id}) detected!")
@@ -545,9 +573,11 @@ async def generate_frames(request: Request):
                             'camera': camera_name, # Added
                             'zone': "N/A",
                             'type': "weapon_detected",
-                            'timestamp': time.time(),
+                            'timestamp': datetime.now(),
                             'imageB64': img_b64,
                         }
+                        await save_alert(weapon_alert) # SAVE TO DB
+                        weapon_states[pid]['alerted'] = True
                         detector.alerts.append(weapon_alert)
                         print(f"⚠️ ALERT: Weapon confirmed for Person {pid}!")
                         weapon_states[pid]['alerted'] = True
@@ -581,9 +611,14 @@ async def generate_frames(request: Request):
             for pid, zone_name in breaches:
                 pdata = persons.get(pid)
                 if pdata:
-                    detector.create_alert_if_new(clean_frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="breach")
+                    new_alert = detector.create_alert_if_new(clean_frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="breach")
+                    if new_alert:
+                        await save_alert(new_alert)
 
-            detector.detect_loitering(persons, loitering_zones, clean_frame, camera_name, time_threshold=10.0)
+            loitering_alerts = detector.detect_loitering(persons, loitering_zones, clean_frame, camera_name, time_threshold=10.0)
+            if loitering_alerts:
+                for alert in loitering_alerts:
+                    await save_alert(alert)
 
 
             # ----------------------------------------------------
@@ -668,9 +703,19 @@ async def video_feed(request: Request):
     return StreamingResponse(generate_frames(request), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/alerts")
-async def get_alerts():
-    """Endpoint returning all system alerts in reverse chronological order."""
-    return JSONResponse(content={"alerts": list(reversed(detector.alerts))})
+async def get_alerts(limit: int = 50):
+    """Fetch alerts from the DB that were generated in the current session."""
+    # Only fetch alerts created after the server started
+    query = {"timestamp": {"$gte": SERVER_START_TIME}}
+    
+    cursor = alerts_collection.find(query).sort("timestamp", -1).limit(limit)
+    alerts = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        alerts.append(doc)
+    
+    # jsonable_encoder converts datetime objects into ISO strings for the frontend
+    return JSONResponse(content={"alerts": jsonable_encoder(alerts)})
 
 
 # ==========================================

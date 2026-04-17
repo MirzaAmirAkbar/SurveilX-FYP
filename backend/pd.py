@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 import os
 import time
+from datetime import datetime # ADD THIS IMPORT
 import torch
 from collections import deque
 from typing import List, Dict, Tuple, Optional, Set, Any
@@ -304,7 +305,7 @@ class RealTimePersonDetector:
 
     def detect_running(self, persons: Dict[int, Dict], frame: np.ndarray, camera_name: str):
         """Analyzes movement history to detect running."""
-        current_time = time.time()
+        current_time = datetime.now()()
         
         for pid, pdata in persons.items():
             if pid not in self.stable_id_positions or len(self.stable_id_positions[pid]) < 3:
@@ -510,14 +511,16 @@ class RealTimePersonDetector:
         'camera': camera_name,  # New field for video filename
         'zone': zone_name,      # Specific zone within that camera
         'type': alert_type,
-        'timestamp': time.time(),
+        'timestamp': datetime.now(), # Changed from time.time()
         'imageB64': img_b64,
     }
         self.alerts.append(alert)
         return alert
     
     def detect_loitering(self, persons: Dict[int, Dict], areas: List[Dict], frame: np.ndarray, camera_name: str, time_threshold: float = 10.0):
-        current_time = time.time()
+        current_loiterers_alerts = []
+        
+        current_time = datetime.now()
         current_loiterers = set()
         # We will rebuild confirmed loiterers based on current state to ensure exit = green
         self.confirmed_loiterers.clear()
@@ -553,17 +556,21 @@ class RealTimePersonDetector:
                         if state['zone_name'] != zone_name:
                             state['zone_name'] = zone_name; state['start_time'] = current_time; state['alerted'] = False
                         
-                        duration = current_time - state['start_time']
+                        duration = (current_time - state['start_time']).total_seconds()
                         
                         # Check if loitering logic is met for coloring
                         if duration > time_threshold:
                             self.confirmed_loiterers.add(pid)
                         
                         if duration > time_threshold and not state['alerted']:
-                            self.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="loitering") # Added camera_name
+                            new_alert = self.create_alert_if_new(frame, pid, pdata['bbox'], zone_name, camera_name, alert_type="loitering")
+                            if new_alert:
+                                current_loiterers_alerts.append(new_alert)
                             state['alerted'] = True
                     break 
 
         for pid in list(self.loitering_state.keys()):
             if pid not in current_loiterers:
                 del self.loitering_state[pid]
+                
+        return current_loiterers_alerts
