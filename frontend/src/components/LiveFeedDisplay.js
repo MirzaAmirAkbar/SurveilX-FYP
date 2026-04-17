@@ -18,17 +18,8 @@ function LiveFeedDisplay({
   const [isDragging, setIsDragging] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
   
-  // Determine video source based on selected camera
-  const isStaticVideo = selectedCamera === 2 || selectedCamera === 3;
-  let videoSrc;
-  
-  if (selectedCamera === 1) {
-    videoSrc = "http://127.0.0.1:8000/video_feed";
-  } else if (selectedCamera === 2) {
-    videoSrc = "/videos/aisle2.mp4";
-  } else if (selectedCamera === 3) {
-    videoSrc = "/videos/aisle3.mp4";
-  }
+ // Remove the isStaticVideo checks
+  const videoSrc = "http://127.0.0.1:8000/video_feed";
 
   useEffect(() => {
     setPolyPoints([]);
@@ -184,24 +175,16 @@ function LiveFeedDisplay({
       <div className="detection-info">
         {drawingTool 
           ? `Drawing ${drawingType === 'RESTRICTED' ? 'Restricted' : 'Loitering'} Area...` 
-          : isStaticVideo ? `Playing Recording: Aisle ${selectedCamera}` : "Live Monitoring Active"}
+          : "Live Monitoring Active"}
       </div>
 
       <div className="video-wrapper">
-        {isStaticVideo ? (
-          <video
-            {...mediaProps}
-            autoPlay
-            loop
-            muted
-            playsInline
-          />
-        ) : (
-          <img
-            {...mediaProps}
-            alt="Live feed"
-          />
-        )}
+        
+        <img
+          {...mediaProps}
+          alt="Live feed"
+        />
+        
 
         <svg className="overlay-layer" style={{ pointerEvents: "none" }}>
           {/* Render Restricted Areas (RED) */}

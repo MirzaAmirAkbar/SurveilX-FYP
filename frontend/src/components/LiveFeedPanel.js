@@ -5,7 +5,8 @@ import LiveFeedDisplay from "./LiveFeedDisplay.js";
 import "./LiveFeedPanel.css";
 
 function LiveFeedPanel() {
-  const [selectedCamera, setSelectedCamera] = useState(1);
+  const [cameras, setCameras] = useState([]); // Now empty by default
+  const [selectedCamera, setSelectedCamera] = useState(null);
   
   // Drawing State
   const [drawingTool, setDrawingTool] = useState(null); // 'POLYGON', 'FREEHAND', or null
@@ -15,13 +16,20 @@ function LiveFeedPanel() {
   const [restrictedAreas, setRestrictedAreas] = useState([]);
   const [loiteringAreas, setLoiteringAreas] = useState([]);
 
-  const cameras = [
-    { id: 1, name: "Aisle 1" },
-    { id: 2, name: "Aisle 2" },
-    { id: 3, name: "Aisle 3" },
-  ];
-
   // --- FETCH DATA ---
+
+  const fetchCameras = async () => {
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/videos");
+      const data = await res.json();
+      if (data.videos && data.videos.length > 0) {
+        setCameras(data.videos);
+        // Set the first video as default if nothing is selected
+        if (!selectedCamera) setSelectedCamera(data.videos[0].id);
+      }
+    } catch (e) { console.warn("Fetch cameras error", e); }
+  };
+
   const fetchRestrictedAreas = async () => {
     try {
       const res = await fetch("http://127.0.0.1:8000/restricted-areas/");
@@ -43,6 +51,7 @@ function LiveFeedPanel() {
   };
 
   const refreshAll = () => {
+    fetchCameras();
     fetchRestrictedAreas();
     fetchLoiteringAreas();
   };
@@ -50,6 +59,18 @@ function LiveFeedPanel() {
   useEffect(() => {
     refreshAll();
   }, []);
+
+  // --- HOT SWAP HANDLER ---
+  const handleCameraSelect = async (cameraId) => {
+    setSelectedCamera(cameraId);
+    try {
+      await fetch("http://127.0.0.1:8000/api/videos/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: cameraId })
+      });
+    } catch (e) { console.error("Failed to switch video", e); }
+  };
 
   // --- TOGGLE & DELETE HANDLERS ---
   const toggleArea = (id, type) => {
@@ -93,7 +114,7 @@ function LiveFeedPanel() {
             key={cam.id}
             name={cam.name}
             isActive={selectedCamera === cam.id}
-            onClick={() => setSelectedCamera(cam.id)}
+            onClick={() => handleCameraSelect(cam.id)}
           />
         ))}
       </div>
