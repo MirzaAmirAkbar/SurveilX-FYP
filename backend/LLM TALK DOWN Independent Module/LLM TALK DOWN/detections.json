@@ -1,0 +1,84 @@
+{
+  "detections": [
+    {
+      "person_id": "P001",
+      "attributes": {
+        "upper_clothing": "white hoodie",
+        "lower_clothing": "black jeans",
+        "accessories": ["glasses"],
+        "footwear": "white sneakers",
+        "gender": "male"
+      }
+    },
+    {
+      "person_id": "P002",
+      "attributes": {
+        "upper_clothing": "red jacket",
+        "lower_clothing": "blue denim jeans",
+        "accessories": ["black cap", "backpack"],
+        "footwear": "black boots",
+        "gender": "female"
+      }
+    },
+    {
+      "person_id": "P003",
+      "attributes": {
+        "upper_clothing": "green t-shirt",
+        "lower_clothing": "khaki pants",
+        "accessories": [],
+        "footwear": "brown shoes",
+        "gender": "male"
+      }
+    },
+    {
+      "person_id": "P004",
+      "attributes": {
+        "upper_clothing": "black leather jacket",
+        "lower_clothing": "grey trousers",
+        "accessories": ["sunglasses"],
+        "footwear": "black sneakers",
+        "gender": "female"
+      }
+    },
+    {
+      "person_id": "P005",
+      "attributes": {
+        "upper_clothing": "blue hoodie",
+        "lower_clothing": "black shorts",
+        "accessories": ["earphones"],
+        "footwear": "running shoes",
+        "gender": "male"
+      }
+    },
+    {
+      "person_id": "P006",
+      "attributes": {
+        "upper_clothing": "yellow dress",
+        "lower_clothing": "N/A",
+        "accessories": ["handbag"],
+        "footwear": "heels",
+        "gender": "female"
+      }
+    },
+    {
+      "person_id": "P007",
+      "attributes": {
+        "upper_clothing": "grey sweatshirt",
+        "lower_clothing": "black joggers",
+        "accessories": ["beanie"],
+        "footwear": "trainers",
+        "gender": "male"
+      }
+    },
+    {
+      "person_id": "P008",
+      "attributes": {
+        "upper_clothing": "pink blouse",
+        "lower_clothing": "white skirt",
+        "accessories": ["glasses", "watch"],
+        "footwear": "sandals",
+        "gender": "female"
+      }
+    }
+  ]
+}
