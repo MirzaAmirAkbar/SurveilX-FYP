@@ -77,7 +77,7 @@ function Login() {
           </form>
 
           <div className="login-footer">
-            <span>Don’t have an account?</span> <a href="#">Sign up</a>
+            <a href="#">Forgot Password?</a>
           </div>
         </div>
       </div>

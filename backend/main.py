@@ -2,7 +2,7 @@
 # SECTION 1: IMPORTS
 # ==========================================
 
-
+from clothing_detect import ClothingDetector
 
 # 1.1 Standard Library Imports
 import os
@@ -57,6 +57,9 @@ from Shoplifting.config import WEIGHT_FILE, SLIDING_WINDOW_STEP, INPUT_FRAMES
 # ==========================================
 # SECTION 2: GLOBAL CONSTANTS & STATE
 # ==========================================
+
+# Format: {pid: {'label': "Hat, Glasses", 'last_check': 0}}
+clothing_states = {}
 
 SERVER_START_TIME = datetime.now() # Marks the start of the current session
 
@@ -147,7 +150,7 @@ shoplifting_detector.load_model()
 print("✅ Shoplifting Detector ready!")
 
 print("🚀 Initializing YOLO model & Face Recognition...")
-detector = RealTimePersonDetector(performance_mode='performance', milvus_host="localhost", milvus_port="19530")
+detector = RealTimePersonDetector( performance_mode='performance', milvus_host="localhost", milvus_port="19530")
 print("✅ Detector ready!")
 
 print("🔫 Initializing Weapon Detector...")
@@ -160,6 +163,12 @@ rfdetr_model.optimize_for_inference()
 item_tracker = sv.ByteTrack()
 box_annotator = sv.BoxAnnotator()
 label_annotator = sv.LabelAnnotator()
+
+
+print("👕 Initializing Clothing Detector...")
+clothing_detector = ClothingDetector()
+print("✅ Clothing Detector ready!")
+
 
 # --- CHANGED: Force a single Orange color for all items ---
 bag_color = sv.Color.YELLOW
@@ -318,6 +327,8 @@ async def generate_frames(request: Request):
                 detector.confirmed_loiterers.clear()
                 detector.active_breaches.clear()
 
+                clothing_states.clear()
+
                 # ---> ADD THESE TWO LINES <---
                 detector.next_stable_id = 1
                 detector.frame_index = 0
@@ -373,6 +384,40 @@ async def generate_frames(request: Request):
             #detector.recognize_identities(clean_frame, persons)
             # Identify PIDs that should trigger Yellow (Bags) or Red (Weapons)
             
+
+            # ----------------------------------------------------
+            # STEP 2.5: CLOTHING DETECTION CACHING
+            # ----------------------------------------------------
+            current_frame_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+            for pid, pdata in persons.items():
+                # Run the model IF the person is new OR 30 frames (1 sec) have passed
+                if pid not in clothing_states or (current_frame_pos - clothing_states[pid]['last_check'] > 30):
+                    x1, y1, x2, y2 = pdata['bbox']
+                    h_f, w_f = clean_frame.shape[:2]
+                    
+                    # Ensure coordinates are within bounds
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w_f, x2), min(h_f, y2)
+                    
+                    crop = clean_frame[y1:y2, x1:x2]
+                    
+                    # Make sure crop is large enough to process safely
+                    if crop.shape[0] > 10 and crop.shape[1] > 10:
+                        attrs = clothing_detector.predict(crop)
+                        active_attrs = [k for k, v in attrs.items() if v]
+                        label_str = ", ".join(active_attrs) if active_attrs else ""
+                        
+                        clothing_states[pid] = {
+                            'label': label_str,
+                            'last_check': current_frame_pos
+                        }
+
+            # Cleanup old PIDs to prevent memory leaks
+            for pid in list(clothing_states.keys()):
+                if pid not in persons and (current_frame_pos - clothing_states[pid]['last_check'] > 90):
+                    del clothing_states[pid]
+                    
+
 
             # ----------------------------------------------------
             # STEP 3: ITEM DETECTION & ABANDONMENT LOGIC
@@ -602,7 +647,8 @@ async def generate_frames(request: Request):
                 persons, 
                 armed_pids=armed_pids, 
                 bag_owner_pids=bag_owner_pids,
-                abandoned_owner_pids=abandoned_owner_pids # NEW ARGUMENT
+                abandoned_owner_pids=abandoned_owner_pids, # NEW ARGUMENT
+                clothing_states=clothing_states
             )
 
             # ----------------------------------------------------

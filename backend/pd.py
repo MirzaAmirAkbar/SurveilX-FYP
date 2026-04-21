@@ -387,7 +387,13 @@ class RealTimePersonDetector:
     def draw_detections(self, frame: np.ndarray, persons: Dict[int, Dict], 
                     armed_pids: Set[int] = set(), 
                     bag_owner_pids: Set[int] = set(),
-                    abandoned_owner_pids: Set[int] = set()) -> np.ndarray: # Add this parameter
+                    abandoned_owner_pids: Set[int] = set(),
+                    clothing_states: Dict[int, Dict] = None) -> np.ndarray: # NEW PARAMETER
+        
+        if clothing_states is None:
+            clothing_states = {}
+
+
         """
         Updated priority-based color system:
         1. Red: Breach, Weapon, OR Abandoned Bag Owner
@@ -430,6 +436,10 @@ class RealTimePersonDetector:
             else:
                 color = (0, 255, 0) # Green
                 label_text = f"ID {person_id}"
+
+                # --- NEW: APPEND CLOTHING INFO ---
+            if person_id in clothing_states and clothing_states[person_id]['label']:
+                label_text += f" | {clothing_states[person_id]['label']}"
 
             # --- DRAWING ---
             # Draw Box
