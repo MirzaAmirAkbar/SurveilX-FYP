@@ -2,6 +2,11 @@
 # SECTION 1: IMPORTS
 # ==========================================
 
+# --- Facial Recognition Imports ---
+from modules.face_detector import FaceDetector
+from modules.embedding_engine import EmbeddingEngine
+from modules.chroma_store import ChromaStore
+
 from clothing_detect import ClothingDetector
 
 # 1.1 Standard Library Imports
@@ -57,6 +62,11 @@ from Shoplifting.config import WEIGHT_FILE, SLIDING_WINDOW_STEP, INPUT_FRAMES
 # ==========================================
 # SECTION 2: GLOBAL CONSTANTS & STATE
 # ==========================================
+
+# Tracks facial status per tracking ID
+# Format: {pid: {'status': 'pending' | 'enrolled' | 'recognized', 'last_check': frame_num, 'person_id': str}}
+facial_states = {}
+
 
 # Format: {pid: {'label': "Hat, Glasses", 'last_check': 0}}
 clothing_states = {}
@@ -149,9 +159,18 @@ shoplifting_detector = ShopliftingDetector(weights_path="Shoplifting/weights/wei
 shoplifting_detector.load_model()
 print("✅ Shoplifting Detector ready!")
 
-print("🚀 Initializing YOLO model & Face Recognition...")
-detector = RealTimePersonDetector( performance_mode='performance', milvus_host="localhost", milvus_port="19530")
+print("🚀 Initializing YOLO model...")
+detector = RealTimePersonDetector(performance_mode='performance')
 print("✅ Detector ready!")
+
+
+print("👤 Initializing Facial Recognition Modules...")
+# Using a slightly lower min_face_size since we are cropping from body bounding boxes
+face_detector = FaceDetector(det_size=(640, 640), min_face_size=30, min_confidence=0.55)
+embedding_engine = EmbeddingEngine()
+chroma_store = ChromaStore(persist_dir="storage/chroma_db")
+print(f"✅ Facial Recognition ready! (Currently stored faces: {chroma_store.get_count()})")
+
 
 print("🔫 Initializing Weapon Detector...")
 weapon_detector = WeaponDetector(model_path='w1.pt', conf_threshold=0.6)
@@ -322,12 +341,14 @@ async def generate_frames(request: Request):
                 detector.stable_id_positions.clear()
                 detector.running_cooldowns.clear()
                 detector.loitering_state.clear()
-                detector.person_identities.clear()
+                
                 detector.current_breaching_ids.clear()
                 detector.confirmed_loiterers.clear()
                 detector.active_breaches.clear()
 
                 clothing_states.clear()
+
+                facial_states.clear()
 
                 # ---> ADD THESE TWO LINES <---
                 detector.next_stable_id = 1
@@ -380,9 +401,7 @@ async def generate_frames(request: Request):
             # ----------------------------------------------------
             detections = detector.detect_persons(frame)
             persons = detector.track_persons(detections, frame)
-            
-            #detector.recognize_identities(clean_frame, persons)
-            # Identify PIDs that should trigger Yellow (Bags) or Red (Weapons)
+        
             
 
             # ----------------------------------------------------
@@ -416,6 +435,80 @@ async def generate_frames(request: Request):
             for pid in list(clothing_states.keys()):
                 if pid not in persons and (current_frame_pos - clothing_states[pid]['last_check'] > 90):
                     del clothing_states[pid]
+
+
+
+            # ----------------------------------------------------
+            # STEP 2.75: FACIAL RECOGNITION (Silent Enroll / Recognize)
+            # ----------------------------------------------------
+            recognized_pids = set()
+            
+            for pid, pdata in persons.items():
+                if pid not in facial_states:
+                    facial_states[pid] = {'status': 'pending', 'last_check': 0, 'person_id': None}
+                
+                state = facial_states[pid]
+                
+                # If already recognized, highlight orange immediately and skip ML check
+                if state['status'] == 'recognized':
+                    recognized_pids.add(pid)
+                    continue
+                
+                # If enrolled during this tracking session, keep them green and skip ML check
+                if state['status'] == 'enrolled':
+                    continue
+                
+                # If pending, try to detect a face periodically (every 15 frames to save CPU/GPU)
+                if state['status'] == 'pending' and (current_frame_pos - state['last_check'] > 15):
+                    state['last_check'] = current_frame_pos
+                    x1, y1, x2, y2 = pdata['bbox']
+                    h_f, w_f = clean_frame.shape[:2]
+                    
+                    # Crop the person's bounding box to isolate the body/face
+                    px1, py1 = max(0, x1), max(0, y1)
+                    px2, py2 = min(w_f, x2), min(h_f, y2)
+                    person_crop = clean_frame[py1:py2, px1:px2]
+                    
+                    # Only run face detection if the crop is reasonably large
+                    if person_crop.shape[0] > 40 and person_crop.shape[1] > 40:
+                        faces = face_detector.detect_faces(person_crop)
+                        
+                        if faces:
+                            # Take the face with the highest confidence
+                            best_face = max(faces, key=lambda f: f['confidence'])
+                            embedding = embedding_engine.get_normalized_embedding(best_face)
+                            
+                            if embedding is not None:
+                                emb_list = embedding_engine.to_list(embedding)
+                                match_id, similarity, metadata = chroma_store.search_best(emb_list)
+                                
+                                # Use SIMILARITY_THRESHOLD (0.55)
+                                if match_id is not None and similarity >= 0.55:
+                                    # MATCH FOUND! (Returning visitor)
+                                    state['status'] = 'recognized'
+                                    state['person_id'] = metadata.get('person_id', 'Unknown')
+                                    recognized_pids.add(pid)
+                                    print(f"👤 Face Match! Person {pid} is {state['person_id']} (sim: {similarity:.2f})")
+                                else:
+                                    # NO MATCH -> Silent Enrollment
+                                    new_person_number = chroma_store.get_count() + 1
+                                    new_person_id = f"Person_{new_person_number:04d}"
+                                    new_emb_id = f"emb_{int(time.time()*1000)}_{pid}"
+                                    
+                                    chroma_store.add_embedding(
+                                        embedding_id=new_emb_id,
+                                        embedding_vector=emb_list,
+                                        metadata={"person_id": new_person_id}
+                                    )
+                                    # Set to enrolled so they don't turn orange until next track loss/regain
+                                    state['status'] = 'enrolled' 
+                                    state['person_id'] = new_person_id
+                                    print(f"👤 Silently Enrolled: {new_person_id} (Tracking ID {pid})")
+
+            # Cleanup old facial states to prevent memory leaks
+            for pid in list(facial_states.keys()):
+                if pid not in persons and (current_frame_pos - facial_states[pid]['last_check'] > 90):
+                    del facial_states[pid]
                     
 
 
@@ -641,14 +734,15 @@ async def generate_frames(request: Request):
 
             armed_pids = {pid for pid, state in weapon_states.items() if state['alerted']}
             bag_owner_pids = {state['owner_id'] for state in item_states.values() if state['owner_id'] is not None}
-            # --- UPDATED CALL: Pass the sets to the detector ---
+            # --- UPDATED CALL: Pass recognized_pids to the detector ---
             detector.draw_detections(
                 frame, 
                 persons, 
                 armed_pids=armed_pids, 
                 bag_owner_pids=bag_owner_pids,
-                abandoned_owner_pids=abandoned_owner_pids, # NEW ARGUMENT
-                clothing_states=clothing_states
+                abandoned_owner_pids=abandoned_owner_pids,
+                clothing_states=clothing_states,
+                recognized_pids=recognized_pids # <--- NEW ARGUMENT
             )
 
             # ----------------------------------------------------

@@ -11,9 +11,6 @@ from typing import List, Dict, Tuple, Optional, Set, Any
 # Third-party imports
 from ultralytics import YOLO
 from cjm_byte_track.core import BYTETracker
-# --- NEW IMPORTS FOR FACE RECOGNITION ---
-from insightface.app import FaceAnalysis
-from milvus_utils import MilvusFaceDB
 
 class RealTimePersonDetector:
     """
@@ -25,9 +22,7 @@ class RealTimePersonDetector:
     def __init__(self, 
                  database_path: str = 'person_database.pkl', 
                  model_path: str = 'yolov8s.pt', 
-                 performance_mode: str = 'balanced',
-                 milvus_host: str = "localhost",
-                 milvus_port: str = "19530"):
+                 performance_mode: str = 'balanced'):
         
         print("\n" + "="*50)
         print(f"Initializing Person Detector (Mode: {performance_mode})")
@@ -76,33 +71,6 @@ class RealTimePersonDetector:
             frame_rate=30
         )
         
-        # --- 4. FACE RECOGNITION SETUP (NEW) ---
-        
-        print("[-] Initializing Face Recognition System...")
-        self.face_rec_enabled = False
-        self.person_identities = {} # stable_id -> {name, similarity}
-        self.rec_interval = 5       # Process faces every 5 frames
-        self.min_face_size = 40
-        self.face_sim_threshold = 0.60
-
-        try:
-            # Initialize InsightFace
-            self.face_app = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"])
-            self.face_app.prepare(ctx_id=0 if self.device == 'cuda' else -1, det_size=(640, 640))
-            
-            # Initialize Milvus
-            self.milvus_db = MilvusFaceDB(
-                host=milvus_host,
-                port=milvus_port,
-                collection_name="face_embeddings",
-                embedding_dim=512
-            )
-            # Check stats to verify connection
-            stats = self.milvus_db.get_collection_stats()
-            print(f"    ✓ Connected to Milvus. Faces in DB: {stats['num_entities']}")
-            self.face_rec_enabled = True
-        except Exception as e:
-            print(f"    ✗ Face Recognition Disabled. Error: {e}")
         
 
         # --- 5. SYSTEM STATE ---
@@ -241,67 +209,7 @@ class RealTimePersonDetector:
         self._cleanup_memory(current_byte_ids)
         return current_frame_persons
 
-    def recognize_identities(self, frame: np.ndarray, persons: Dict[int, Dict]):
-        if not self.face_rec_enabled:
-            return
-
-        # Process every N frames to keep FPS high
-        if self.frame_index % self.rec_interval != 0:
-            return
-
-        for stable_id, pdata in persons.items():
-            # If we already identified them in this session with high confidence, skip
-            if stable_id in self.person_identities and self.person_identities[stable_id]['similarity'] > 0.85:
-                continue
-
-            x1, y1, x2, y2 = pdata['bbox']
-            h, w = frame.shape[:2]
-            person_roi = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
-            
-            if person_roi.size == 0: continue
-
-            # 1. Detect faces inside the person's bounding box
-            faces = self.face_app.get(person_roi)
-
-            for f in faces:
-                # Filter out small/blurry faces
-                box = f.bbox
-                if (box[2] - box[0]) < self.min_face_size: continue
-
-                embedding = f.embedding
-                
-                # 2. Search Milvus for a match
-                matches = self.milvus_db.search_face(
-                    embedding=embedding,
-                    top_k=1,
-                    threshold=self.face_sim_threshold
-                )
-
-                if matches:
-                    # MATCH FOUND: Update their identity
-                    best_match = matches[0]
-                    self.person_identities[stable_id] = {
-                        "name": best_match["person_name"],
-                        "similarity": best_match["similarity"]
-                    }
-                    print(f"✨ Match Found: {best_match['person_name']} ({best_match['similarity']:.2f})")
-                else:
-                    # NO MATCH: Add to Database automatically
-                    new_name = f"Person_{stable_id}" # Or handle naming via frontend later
-                    self.milvus_db.insert_face(
-                        embedding=embedding,
-                        stable_id=stable_id,
-                        frame_number=self.frame_index,
-                        bbox=(int(x1), int(y1), int(x2), int(y2)),
-                        person_name=new_name
-                    )
-                    
-                    # Update local state so the UI shows the new ID immediately
-                    self.person_identities[stable_id] = {
-                        "name": new_name,
-                        "similarity": 1.0
-                    }
-                    print(f"🆕 New Face Registered: {new_name}")
+    
 
     def detect_running(self, persons: Dict[int, Dict], frame: np.ndarray, camera_name: str):
         """Analyzes movement history to detect running."""
@@ -352,7 +260,6 @@ class RealTimePersonDetector:
                 self.running_cooldowns.pop(sid, None)
                 self.loitering_state.pop(sid, None)
                 # Cleanup identities and states
-                self.person_identities.pop(sid, None)
                 self.current_breaching_ids.discard(sid)
                 self.confirmed_loiterers.discard(sid)
 
@@ -388,7 +295,8 @@ class RealTimePersonDetector:
                     armed_pids: Set[int] = set(), 
                     bag_owner_pids: Set[int] = set(),
                     abandoned_owner_pids: Set[int] = set(),
-                    clothing_states: Dict[int, Dict] = None) -> np.ndarray: # NEW PARAMETER
+                    clothing_states: Dict[int, Dict] = None,
+                    recognized_pids: Set[int] = set()) -> np.ndarray:
         
         if clothing_states is None:
             clothing_states = {}
@@ -420,12 +328,12 @@ class RealTimePersonDetector:
                     reason = "BREACH"
                 label_text = f"{reason}! ID {person_id}"
 
-            # PRIORITY 2: ORANGE (Facial Recognition)
-            elif person_id in self.person_identities:
-                # ... existing orange logic ...
-                color = (0, 165, 255)
-                label_text = f"ID {person_id}: {self.person_identities[person_id]['name']}"
-
+            # PRIORITY 2: ORANGE (Face Recognized / Returning Person)
+            elif person_id in recognized_pids:
+                color = (0, 165, 255) # BGR for Orange
+                reason = "RECOGNIZED"
+                label_text = f"{reason} ID {person_id}"
+                
             # PRIORITY 3: YELLOW (Loitering or Normal Bag Owner)
             elif person_id in self.confirmed_loiterers or person_id in bag_owner_pids:
                 color = (0, 255, 255) # Yellow
